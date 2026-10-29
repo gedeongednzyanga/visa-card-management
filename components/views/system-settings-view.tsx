@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { MoreHorizontal, Plus, ShieldCheck } from "lucide-react"
+import { Eye, EyeOff, Loader2, MoreHorizontal, Plus, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -30,36 +30,60 @@ import { DataTable, FilterSelect, type Column } from "@/components/shared/data-t
 import { FormField } from "@/components/shared/form-field"
 import { ActivePill } from "@/components/shared/pills"
 import { StatusPill } from "@/components/shared/status-pill"
-import { rolePermissions, users as initialUsers, type AppUser, type UserRole } from "@/lib/data/operations"
-import { agencies } from "@/lib/data/seed"
+import { createUser } from "@/lib/actions/users"
+import type { ApiUser } from "@/lib/api"
+import { rolePermissions } from "@/lib/data/operations"
 
-const roles = rolePermissions.map((r) => r.role)
+const roleLabels: Record<ApiUser["role"], string> = {
+  admin: "Administrateur",
+  user: "Utilisateur",
+}
 
-function NewUserDialog({ onCreate }: { onCreate: (user: AppUser) => void }) {
+const fullName = (u: ApiUser) => `${u.firstName} ${u.lastName}`
+const initials = (u: ApiUser) => `${u.firstName[0] ?? ""}${u.lastName[0] ?? ""}`.toUpperCase()
+const dateFormat = new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" })
+
+// Mêmes règles que le RegisterDto de l'API acces-register.
+const PASSWORD_PATTERN = "(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}"
+
+function NewUserDialog({ onCreate }: { onCreate: (user: ApiUser) => void }) {
   const [open, setOpen] = useState(false)
-  const [role, setRole] = useState<string>("Agent")
-  const [agency, setAgency] = useState<string>(agencies[0])
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function handleOpenChange(next: boolean) {
+    setOpen(next)
+    if (!next) {
+      setError(null)
+      setShowPassword(false)
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
-    const name = String(form.get("name"))
-    onCreate({
-      id: `USR-${Date.now()}`,
-      name,
-      initials: name.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase(),
+    setError(null)
+    setLoading(true)
+    const result = await createUser({
+      firstName: String(form.get("firstName")),
+      lastName: String(form.get("lastName")),
       email: String(form.get("email")),
-      role: role as UserRole,
-      agency,
-      lastLogin: "Jamais",
-      active: true,
+      password: String(form.get("password")),
     })
-    toast.success(`Invitation envoyée à ${form.get("email")}`)
-    setOpen(false)
+    setLoading(false)
+    if (!result.ok) {
+      setError(result.error)
+      return
+    }
+
+    onCreate(result.user)
+    toast.success(`Utilisateur ${fullName(result.user)} créé`)
+    handleOpenChange(false)
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger render={<Button className="h-9" />}>
         <Plus /> Ajouter un utilisateur
       </DialogTrigger>
@@ -68,23 +92,65 @@ function NewUserDialog({ onCreate }: { onCreate: (user: AppUser) => void }) {
           <DialogHeader>
             <DialogTitle>Nouvel utilisateur</DialogTitle>
           </DialogHeader>
-          <FormField label="Nom complet" htmlFor="u-name">
-            <Input id="u-name" name="name" required />
-          </FormField>
-          <FormField label="E-mail professionnel" htmlFor="u-email">
-            <Input id="u-email" name="email" type="email" required placeholder="prenom@accesfinance.cd" />
-          </FormField>
           <div className="grid grid-cols-2 gap-4">
-            <FormField label="Rôle">
-              <FilterSelect items={roles.map((r) => ({ value: r, label: r }))} value={role} onChange={setRole} className="w-full text-sm" />
+            <FormField label="Prénom" htmlFor="u-first-name">
+              <Input id="u-first-name" name="firstName" required maxLength={100} autoComplete="off" />
             </FormField>
-            <FormField label="Agence">
-              <FilterSelect items={agencies.map((a) => ({ value: a, label: a }))} value={agency} onChange={setAgency} className="w-full text-sm" />
+            <FormField label="Nom" htmlFor="u-last-name">
+              <Input id="u-last-name" name="lastName" required maxLength={100} autoComplete="off" />
             </FormField>
           </div>
+          <FormField label="E-mail professionnel" htmlFor="u-email">
+            <Input
+              id="u-email"
+              name="email"
+              type="email"
+              required
+              maxLength={180}
+              autoComplete="off"
+              placeholder="prenom@accesfinance.cd"
+            />
+          </FormField>
+          <FormField
+            label="Mot de passe initial"
+            htmlFor="u-password"
+            hint="8 caractères minimum, avec une majuscule, une minuscule et un chiffre."
+          >
+            <div className="relative">
+              <Input
+                id="u-password"
+                name="password"
+                type={showPassword ? "text" : "password"}
+                required
+                minLength={8}
+                pattern={PASSWORD_PATTERN}
+                title="8 caractères minimum, avec une majuscule, une minuscule et un chiffre"
+                autoComplete="new-password"
+                className="pr-9"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="absolute top-1/2 right-1 -translate-y-1/2 text-muted-foreground"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+              >
+                {showPassword ? <EyeOff /> : <Eye />}
+              </Button>
+            </div>
+          </FormField>
+          {error && (
+            <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+              {error}
+            </p>
+          )}
           <DialogFooter>
             <DialogClose render={<Button type="button" variant="outline" />}>Annuler</DialogClose>
-            <Button type="submit">Envoyer l&apos;invitation</Button>
+            <Button type="submit" disabled={loading}>
+              {loading && <Loader2 className="animate-spin" />}
+              Créer l&apos;utilisateur
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -92,26 +158,26 @@ function NewUserDialog({ onCreate }: { onCreate: (user: AppUser) => void }) {
   )
 }
 
-export function SystemSettingsView() {
+export function SystemSettingsView({ initialUsers }: { initialUsers: ApiUser[] }) {
   const [users, setUsers] = useState(initialUsers)
   const [twoFactor, setTwoFactor] = useState(true)
   const [sessionTimeout, setSessionTimeout] = useState("15")
 
-  function toggleActive(user: AppUser) {
-    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, active: !u.active } : u)))
-    toast.success(`${user.name} ${user.active ? "désactivé" : "réactivé"}`)
+  function toggleActive(user: ApiUser) {
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, isActive: !u.isActive } : u)))
+    toast.success(`${fullName(user)} ${user.isActive ? "désactivé" : "réactivé"}`)
   }
 
-  const columns: Column<AppUser>[] = [
+  const columns: Column<ApiUser>[] = [
     {
       header: "Utilisateur",
       cell: (u) => (
         <span className="flex items-center gap-2">
           <Avatar className="size-7">
-            <AvatarFallback className="text-[10px] font-semibold">{u.initials}</AvatarFallback>
+            <AvatarFallback className="text-[10px] font-semibold">{initials(u)}</AvatarFallback>
           </Avatar>
           <span>
-            <span className="block font-medium">{u.name}</span>
+            <span className="block font-medium">{fullName(u)}</span>
             <span className="block text-muted-foreground">{u.email}</span>
           </span>
         </span>
@@ -120,21 +186,20 @@ export function SystemSettingsView() {
     {
       header: "Rôle",
       cell: (u) => (
-        <StatusPill tone={u.role === "Administrateur" ? "purple" : "info"} className="text-[10.5px]">
-          {u.role}
+        <StatusPill tone={u.role === "admin" ? "purple" : "info"} className="text-[10.5px]">
+          {roleLabels[u.role]}
         </StatusPill>
       ),
     },
-    { header: "Agence", cell: (u) => u.agency },
-    { header: "Dernière connexion", cell: (u) => u.lastLogin },
-    { header: "Statut", cell: (u) => <ActivePill active={u.active} /> },
+    { header: "Créé le", cell: (u) => dateFormat.format(new Date(u.createdAt)) },
+    { header: "Statut", cell: (u) => <ActivePill active={u.isActive} /> },
     {
       header: "Actions",
       className: "text-center",
       cell: (u) => (
         <DropdownMenu>
           <DropdownMenuTrigger
-            render={<Button variant="outline" size="icon-sm" className="h-6 w-8" aria-label={`Actions pour ${u.name}`} />}
+            render={<Button variant="outline" size="icon-sm" className="h-6 w-8" aria-label={`Actions pour ${fullName(u)}`} />}
           >
             <MoreHorizontal />
           </DropdownMenuTrigger>
@@ -143,8 +208,8 @@ export function SystemSettingsView() {
               Réinitialiser le mot de passe
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant={u.active ? "destructive" : "default"} onClick={() => toggleActive(u)}>
-              {u.active ? "Désactiver" : "Réactiver"}
+            <DropdownMenuItem variant={u.isActive ? "destructive" : "default"} onClick={() => toggleActive(u)}>
+              {u.isActive ? "Désactiver" : "Réactiver"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -167,23 +232,26 @@ export function SystemSettingsView() {
           headerAction={<NewUserDialog onCreate={(u) => setUsers((prev) => [u, ...prev])} />}
           data={users}
           columns={columns}
-          rowKey={(u) => u.id}
+          rowKey={(u) => String(u.id)}
           itemLabel="utilisateurs"
           exportable={false}
           searchPlaceholder="Rechercher par nom, e-mail..."
-          searchText={(u) => `${u.name} ${u.email}`}
+          searchText={(u) => `${fullName(u)} ${u.email}`}
           filters={[
             {
               id: "role",
               allLabel: "Tous les rôles",
-              options: roles.map((r) => ({ value: r, label: r })),
+              options: Object.entries(roleLabels).map(([value, label]) => ({ value, label })),
               getValue: (u) => u.role,
             },
             {
-              id: "agency",
-              allLabel: "Toutes les agences",
-              options: agencies.map((a) => ({ value: a, label: a })),
-              getValue: (u) => u.agency,
+              id: "status",
+              allLabel: "Tous les statuts",
+              options: [
+                { value: "active", label: "Actif" },
+                { value: "inactive", label: "Inactif" },
+              ],
+              getValue: (u) => (u.isActive ? "active" : "inactive"),
             },
           ]}
         />
@@ -208,9 +276,6 @@ export function SystemSettingsView() {
                     </StatusPill>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  {users.filter((u) => u.role === r.role).length} utilisateur(s)
-                </p>
               </CardContent>
             </Card>
           ))}

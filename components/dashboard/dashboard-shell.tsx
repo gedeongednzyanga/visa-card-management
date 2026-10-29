@@ -1,26 +1,22 @@
 "use client"
 
 import { useState } from "react"
-import { useRouter } from "next/navigation"
-import { Bell, ChevronDown, LogOut, Menu, Search, Settings, User } from "lucide-react"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Bell, Menu, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { AppSidebar } from "./app-sidebar"
 
-export function DashboardShell({ children }: { children: React.ReactNode }) {
+export function DashboardShell({
+  children,
+  userMenu,
+}: {
+  children: React.ReactNode
+  userMenu: React.ReactNode
+}) {
   // Sur desktop : sidebar repliable ; sur mobile : tiroir superposé.
   const [desktopOpen, setDesktopOpen] = useState(true)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const router = useRouter()
 
   function toggleSidebar() {
     if (window.matchMedia("(min-width: 1024px)").matches) {
@@ -34,7 +30,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-svh">
       <div
         className={cn(
-          "sticky top-0 hidden h-svh w-[226px] shrink-0 lg:block",
+          "sticky top-0 hidden h-svh w-56.5 shrink-0 lg:block",
           !desktopOpen && "lg:hidden"
         )}
       >
@@ -47,14 +43,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             className="absolute inset-0 bg-black/40"
             onClick={() => setMobileOpen(false)}
           />
-          <div className="relative h-full w-[260px]">
+          <div className="relative h-full w-65">
             <AppSidebar onNavigate={() => setMobileOpen(false)} />
           </div>
         </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-40 flex h-[52px] shrink-0 items-center gap-3 border-b bg-card px-4 sm:gap-5 sm:px-5">
+        <header className="sticky top-0 z-40 flex h-13 shrink-0 items-center gap-3 border-b bg-card px-4 sm:gap-5 sm:px-5">
           <Button
             variant="ghost"
             size="icon"
@@ -64,7 +60,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <Menu className="size-5" />
           </Button>
 
-          <div className="relative w-full max-w-[420px]">
+          <div className="relative w-full max-w-105">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
@@ -86,43 +82,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
               </span>
             </Button>
 
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <button
-                    type="button"
-                    className="flex items-center gap-3 rounded-lg p-1 outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50"
-                  />
-                }
-              >
-                <Avatar className="size-10">
-                  <AvatarFallback className="bg-sidebar text-sm font-semibold text-white">
-                    DB
-                  </AvatarFallback>
-                </Avatar>
-                <span className="hidden text-left leading-tight sm:block">
-                  <span className="block text-sm font-semibold">
-                    Daniel Balinda
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    Administrateur
-                  </span>
-                </span>
-                <ChevronDown className="hidden size-4 text-muted-foreground sm:block" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem>
-                  <User /> Mon profil
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => router.push("/parametres")}>
-                  <Settings /> Paramètres
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onClick={() => router.push("/connexion")}>
-                  <LogOut /> Se déconnecter
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {userMenu}
           </div>
         </header>
 
