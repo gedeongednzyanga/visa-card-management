@@ -1,6 +1,12 @@
 // Données fictives pour le frontend — à remplacer par l'API.
 
 export type CardStatus = "active" | "bloquee" | "en-attente" | "expiree"
+// Le type reste large (Mastercard, CDF) pour ne pas casser le reste du
+// dashboard (paramètres, filtres de transactions, etc.) ni empêcher un futur
+// fournisseur ou produit. Mais KardPay ne signe qu'un seul produit pour
+// Accès Finance : access-finance-virtual-usd (Visa, USD). Voir
+// isKardPaySupported() ci-dessous — c'est le seul endroit qui décide si une
+// carte peut passer par freeze/unfreeze/sensitive/émission KardPay.
 export type CardNetwork = "visa" | "mastercard"
 export type Currency = "USD" | "CDF"
 
@@ -18,6 +24,19 @@ export type VirtualCard = {
   monthlySpent: number
   perTransactionLimit: number
   transactionCount: number
+  // Id réel renvoyé par KardPay à l'émission (section 10.3, un UUID) — PAS la
+  // même chose que `reference`, qui est notre référence interne Accès
+  // Finance. `null` tant que la carte n'a pas été réellement émise via
+  // l'API (toutes les cartes de démo ci-dessous sont dans ce cas : ce
+  // dépôt est 100% mock, voir le plan d'adaptation étape 1). Dès que
+  // lib/cards-data.ts sera remplacé par un vrai GET /cards, ce champ sera
+  // rempli par l'API et plus jamais par le frontend.
+  kardpayCardId: string | null
+}
+
+/** Seule combinaison que KardPay sait émettre/gérer pour Accès Finance (section 9). */
+export function isKardPaySupported(card: Pick<VirtualCard, "network" | "currency">): boolean {
+  return card.network === "visa" && card.currency === "USD"
 }
 
 export type CardTransaction = {
@@ -97,6 +116,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 1240,
     perTransactionLimit: 1000,
     transactionCount: 18,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261020-002",
@@ -112,6 +132,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 450,
     perTransactionLimit: 500,
     transactionCount: 6,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261019-003",
@@ -127,6 +148,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 8900,
     perTransactionLimit: 5000,
     transactionCount: 42,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261019-004",
@@ -142,6 +164,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 320000,
     perTransactionLimit: 500000,
     transactionCount: 9,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261018-005",
@@ -157,6 +180,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 0,
     perTransactionLimit: 500,
     transactionCount: 0,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261018-006",
@@ -172,6 +196,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 6150,
     perTransactionLimit: 2000,
     transactionCount: 27,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261017-007",
@@ -187,6 +212,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 0,
     perTransactionLimit: 300000,
     transactionCount: 0,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261017-008",
@@ -202,6 +228,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 980,
     perTransactionLimit: 800,
     transactionCount: 11,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261016-009",
@@ -217,6 +244,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 14300,
     perTransactionLimit: 5000,
     transactionCount: 63,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
   {
     reference: "VC-20261016-010",
@@ -232,6 +260,7 @@ export const virtualCards: VirtualCard[] = [
     monthlySpent: 2875,
     perTransactionLimit: 1000,
     transactionCount: 22,
+    kardpayCardId: null, // carte de démo, jamais émise via l'API
   },
 ]
 

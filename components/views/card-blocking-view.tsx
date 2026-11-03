@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { Loader2, Lock, Unlock } from "lucide-react"
 import { toast } from "sonner"
-import { NetworkLogo, StatusBadge } from "@/components/cards/card-badges"
+import { KardPayScopeBadge, NetworkLogo, StatusBadge } from "@/components/cards/card-badges"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -21,18 +21,30 @@ import { FormField } from "@/components/shared/form-field"
 import { StatusPill } from "@/components/shared/status-pill"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { kardpayErrorMessage } from "@/lib/kardpay/error-messages"
-import { statusLabels, virtualCards, type VirtualCard } from "@/lib/cards-data"
+import { isKardPaySupported, statusLabels, virtualCards, type VirtualCard } from "@/lib/cards-data"
 import { blockHistory, type BlockEvent } from "@/lib/data/operations"
 import { cn } from "@/lib/utils"
 
-// NOTE : `card.reference` (ex. "VC-20261020-001") est la référence interne
-// mock de ce dépôt, PAS l'id de carte KardPay (un UUID renvoyé à l'émission,
-// section 10.3). Tant que lib/cards-data.ts reste fictif (plan d'adaptation,
-// étape 1), on l'utilise comme identifiant de carte faute de mieux ; à
-// remplacer par le vrai id KardPay dès que GET /cards alimente ce tableau
-// depuis le backend.
-async function callCardAction(action: "freeze" | "unfreeze", cardId: string) {
-  const res = await fetch(`/api/cards/${cardId}/${action}`, {
+// Avant d'appeler l'API, vérifie que cette carte PEUT réellement passer par
+// KardPay : bon produit (Visa/USD, voir isKardPaySupported) ET un vrai
+// kardpayCardId (l'UUID renvoyé à l'émission, section 10.3) — pas la
+// référence interne Accès Finance. Tant que lib/cards-data.ts reste 100%
+// mock (plan d'adaptation, étape 1), kardpayCardId est toujours null : ce
+// n'est pas un bug, juste l'absence d'une carte réellement émise. On le
+// dit clairement plutôt que de laisser l'appel réseau échouer avec une
+// erreur opaque (kardpay_unavailable / not_found).
+function kardPayActionBlockedReason(card: VirtualCard): string | null {
+  if (!isKardPaySupported(card)) {
+    return "Cette carte n'est pas un produit KardPay (Visa USD uniquement) : aucune action n'est possible via l'API."
+  }
+  if (!card.kardpayCardId) {
+    return "Carte de démonstration non synchronisée avec KardPay (pas encore émise via l'API) : aucune action réelle possible."
+  }
+  return null
+}
+
+async function callCardAction(action: "freeze" | "unfreeze", kardpayCardId: string) {
+  const res = await fetch(`/api/cards/${kardpayCardId}/${action}`, {
     method: "POST",
     headers: { "Idempotency-Key": createIdempotencyKey() },
     cache: "no-store",
@@ -89,9 +101,14 @@ export function CardBlockingView() {
   async function confirmBlock() {
     if (!blocking) return
     const card = blocking
+    const blockedReason = kardPayActionBlockedReason(card)
+    if (blockedReason) {
+      toast.error("Blocage impossible", { description: blockedReason })
+      return
+    }
     setBusyRef(card.reference)
     try {
-      await callCardAction("freeze", card.reference)
+      await callCardAction("freeze", card.kardpayCardId!)
       record(card, "blocage", reason)
       toast.success(`Carte **** ${card.last4} bloquée`, { description: reason })
       setBlocking(null)
@@ -103,9 +120,14 @@ export function CardBlockingView() {
   }
 
   async function unblock(card: VirtualCard) {
+    const blockedReason = kardPayActionBlockedReason(card)
+    if (blockedReason) {
+      toast.error("Déblocage impossible", { description: blockedReason })
+      return
+    }
     setBusyRef(card.reference)
     try {
-      await callCardAction("unfreeze", card.reference)
+      await callCardAction("unfreeze", card.kardpayCardId!)
       record(card, "deblocage", "Vérification effectuée")
       toast.success(`Carte **** ${card.last4} débloquée`)
     } catch (e) {
@@ -134,6 +156,7 @@ export function CardBlockingView() {
             <NetworkLogo network={c.network} />
           </span>
           **** {c.last4}
+          <KardPayScopeBadge network={c.network} currency={c.currency} />
         </span>
       ),
     },
@@ -141,24 +164,37 @@ export function CardBlockingView() {
     {
       header: "Action",
       className: "text-center",
-      cell: (c) =>
-        c.status === "bloquee" ? (
-          <Button
-            size="xs"
-            variant="outline"
-            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-            disabled={busyRef === c.reference}
-            onClick={() => unblock(c)}
-          >
-            {busyRef === c.reference ? <Loader2 className="animate-spin" /> : <Unlock />} Débloquer
-          </Button>
-        ) : c.status === "active" ? (
-          <Button size="xs" variant="destructive" disabled={busyRef === c.reference} onClick={() => setBlocking(c)}>
-            <Lock /> Bloquer
-          </Button>
-        ) : (
-          <span className="text-muted-foreground">Indisponible</span>
-        ),
+      cell: (c) => {
+        const blockedReason = kardPayActionBlockedReason(c)
+        if (c.status === "bloquee") {
+          return (
+            <Button
+              size="xs"
+              variant="outline"
+              className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+              disabled={busyRef === c.reference || !!blockedReason}
+              title={blockedReason ?? undefined}
+              onClick={() => unblock(c)}
+            >
+              {busyRef === c.reference ? <Loader2 className="animate-spin" /> : <Unlock />} Débloquer
+            </Button>
+          )
+        }
+        if (c.status === "active") {
+          return (
+            <Button
+              size="xs"
+              variant="destructive"
+              disabled={busyRef === c.reference || !!blockedReason}
+              title={blockedReason ?? undefined}
+              onClick={() => setBlocking(c)}
+            >
+              <Lock /> Bloquer
+            </Button>
+          )
+        }
+        return <span className="text-muted-foreground">Indisponible</span>
+      },
     },
   ]
 

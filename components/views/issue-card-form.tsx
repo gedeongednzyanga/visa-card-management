@@ -16,7 +16,7 @@ import { FilterSelect } from "@/components/shared/data-table"
 import { FormField } from "@/components/shared/form-field"
 import { createIdempotencyKey } from "@/lib/idempotency"
 import { kardpayErrorMessage } from "@/lib/kardpay/error-messages"
-import { networkLabels, type CardNetwork, type VirtualCard } from "@/lib/cards-data"
+import { isKardPaySupported, networkLabels, type CardNetwork, type VirtualCard } from "@/lib/cards-data"
 import { accounts, accountTypeLabels, clients } from "@/lib/data/clients"
 import { formatAmount } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -72,6 +72,7 @@ export function IssueCardForm() {
     monthlySpent: 0,
     perTransactionLimit: Number(perTx),
     transactionCount: 0,
+    kardpayCardId: null,
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -80,11 +81,9 @@ export function IssueCardForm() {
       toast.error("Le plafond par transaction dépasse le plafond mensuel")
       return
     }
-    if (network !== "visa" || account.currency !== "USD") {
-      // KardPay ne signe qu'un seul produit : access-finance-virtual-usd
-      // (Visa, USD — section 9). Les autres combinaisons existent encore
-      // dans cette UI mock mais ne peuvent pas être émises via l'API tant
-      // qu'elles ne sont pas retirées (plan d'adaptation, étape 3).
+    if (!isKardPaySupported({ network, currency: account.currency })) {
+      // Filet de sécurité : le sélecteur ci-dessous désactive déjà cette
+      // combinaison, ce cas ne devrait normalement pas être atteignable.
       toast.error("Produit non disponible chez KardPay", {
         description: "Seule une carte Visa en USD peut être émise pour l'instant (produit access-finance-virtual-usd).",
       })
@@ -179,20 +178,39 @@ export function IssueCardForm() {
               onValueChange={(v) => setNetwork(v as CardNetwork)}
               className="grid gap-3 sm:grid-cols-2"
             >
-              {(["visa", "mastercard"] as const).map((n) => (
-                <Label
-                  key={n}
-                  className={cn(
-                    "flex cursor-pointer items-center gap-3 rounded-lg border p-3 font-normal",
-                    network === n && "border-primary bg-primary/5"
-                  )}
-                >
-                  <RadioGroupItem value={n} />
-                  <NetworkLogo network={n} />
-                  <span className="font-medium">{networkLabels[n]}</span>
-                </Label>
-              ))}
+              {(["visa", "mastercard"] as const).map((n) => {
+                // KardPay ne signe qu'un seul produit : access-finance-virtual-usd
+                // (Visa, USD — section 9). Le reste reste visible (autres
+                // fournisseurs possibles un jour) mais désactivé ici plutôt que
+                // de laisser l'utilisateur le choisir pour échouer à la soumission.
+                const supported = isKardPaySupported({ network: n, currency: account.currency })
+                return (
+                  <Label
+                    key={n}
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg border p-3 font-normal",
+                      supported ? "cursor-pointer" : "cursor-not-allowed opacity-50",
+                      network === n && supported && "border-primary bg-primary/5"
+                    )}
+                  >
+                    <RadioGroupItem value={n} disabled={!supported} />
+                    <NetworkLogo network={n} />
+                    <span className="flex flex-col">
+                      <span className="font-medium">{networkLabels[n]}</span>
+                      {!supported && (
+                        <span className="text-[11px] text-muted-foreground">Non disponible via KardPay</span>
+                      )}
+                    </span>
+                  </Label>
+                )
+              })}
             </RadioGroup>
+            {account.currency !== "USD" && (
+              <p className="rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800">
+                Ce compte est en {account.currency} : KardPay n&apos;émet qu&apos;en USD (produit
+                access-finance-virtual-usd). Choisissez un compte en USD pour émettre réellement la carte.
+              </p>
+            )}
 
             <p className="text-xs text-muted-foreground">
               Les plafonds ci-dessous sont des limites internes Accès Finance : KardPay n&apos;a pas de notion de

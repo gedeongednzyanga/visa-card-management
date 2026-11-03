@@ -26,7 +26,7 @@ import {
   type VirtualCard,
 } from "@/lib/cards-data"
 import { cn } from "@/lib/utils"
-import { StatusBadge } from "./card-badges"
+import { KardPayScopeBadge, StatusBadge } from "./card-badges"
 import { VirtualCardVisual } from "./virtual-card-visual"
 
 function InfoRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -44,7 +44,7 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 // Il disparaît tout seul après REVEAL_SECONDS, et au démontage du composant.
 const REVEAL_SECONDS = 15
 
-function CvvReveal({ cardId }: { cardId: string }) {
+function CvvReveal({ kardpayCardId }: { kardpayCardId: string | null }) {
   const [cvv, setCvv] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -55,9 +55,18 @@ function CvvReveal({ cardId }: { cardId: string }) {
   }
 
   async function reveal() {
+    // Carte de démo jamais émise via l'API (kardpayCardId est alors null,
+    // voir lib/cards-data.ts) : pas d'appel réseau voué à échouer, message
+    // clair à la place.
+    if (!kardpayCardId) {
+      toast.error("CVV indisponible", {
+        description: "Carte de démonstration non synchronisée avec KardPay (pas encore émise via l'API).",
+      })
+      return
+    }
     setLoading(true)
     try {
-      const res = await fetch(`/api/cards/${cardId}/sensitive`, { cache: "no-store" })
+      const res = await fetch(`/api/cards/${kardpayCardId}/sensitive`, { cache: "no-store" })
       if (!res.ok) {
         toast.error("Impossible de récupérer le CVV", {
           description: "Le service carte n'est pas encore connecté.",
@@ -148,7 +157,12 @@ export function CardDetails({
               {card.account}
             </a>
           </InfoRow>
-          <InfoRow label="Type">{networkLabels[card.network]}</InfoRow>
+          <InfoRow label="Type">
+            <span className="flex items-center gap-2">
+              {networkLabels[card.network]}
+              <KardPayScopeBadge network={card.network} currency={card.currency} />
+            </span>
+          </InfoRow>
           <InfoRow label="Devise">{card.currency}</InfoRow>
           <InfoRow label="Statut">
             <StatusBadge status={card.status} />
@@ -156,7 +170,7 @@ export function CardDetails({
           <InfoRow label="Date d'émission">{card.issuedAt}</InfoRow>
           <InfoRow label="Date d'expiration">{card.expiresAt}</InfoRow>
           <InfoRow label="CVV">
-            <CvvReveal cardId={card.reference} />
+            <CvvReveal kardpayCardId={card.kardpayCardId} />
           </InfoRow>
         </dl>
       </section>

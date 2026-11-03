@@ -1,6 +1,6 @@
 import { CheckCircle2, Clock, Lock, MinusSquare } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { statusLabels, type CardNetwork, type CardStatus } from "@/lib/cards-data"
+import { isKardPaySupported, statusLabels, type CardNetwork, type CardStatus, type Currency } from "@/lib/cards-data"
 import { cn } from "@/lib/utils"
 
 const statusStyles: Record<CardStatus, { className: string; icon: typeof Lock }> = {
@@ -24,6 +24,30 @@ export function StatusBadge({
     >
       <Icon data-icon="inline-start" />
       {statusLabels[status]}
+    </Badge>
+  )
+}
+
+/**
+ * Signale une carte Mastercard et/ou CDF : hors du seul produit signé par
+ * KardPay (access-finance-virtual-usd, Visa USD — voir isKardPaySupported).
+ * Ces cartes restent affichées (mock historique / futur fournisseur) mais
+ * ne peuvent pas passer par freeze, unfreeze ou la révélation du CVV via
+ * l'API KardPay actuelle.
+ */
+export function KardPayScopeBadge({
+  network,
+  currency,
+  className,
+}: {
+  network: CardNetwork
+  currency: Currency
+  className?: string
+}) {
+  if (isKardPaySupported({ network, currency })) return null
+  return (
+    <Badge variant="outline" className={cn("rounded-md px-1.5 text-[10px] font-medium text-muted-foreground", className)}>
+      Hors KardPay
     </Badge>
   )
 }

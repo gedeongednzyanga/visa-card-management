@@ -46,7 +46,7 @@ import {
   type VirtualCard,
 } from "@/lib/cards-data"
 import { cn } from "@/lib/utils"
-import { NetworkLogo, StatusBadge } from "./card-badges"
+import { KardPayScopeBadge, NetworkLogo, StatusBadge } from "./card-badges"
 
 const statusItems = [
   { value: "all", label: "Tous les statuts" },
@@ -226,6 +226,7 @@ export function CardsTable({
                         <NetworkLogo network={card.network} />
                       </span>
                       {networkLabels[card.network]}
+                      <KardPayScopeBadge network={card.network} currency={card.currency} />
                     </span>
                   </TableCell>
                   <TableCell>{card.currency}</TableCell>
