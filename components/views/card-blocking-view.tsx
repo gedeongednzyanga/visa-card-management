@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Lock, Unlock } from "lucide-react"
+import { Loader2, Lock, Unlock } from "lucide-react"
 import { toast } from "sonner"
 import { NetworkLogo, StatusBadge } from "@/components/cards/card-badges"
 import { Button } from "@/components/ui/button"
@@ -19,9 +19,30 @@ import { Textarea } from "@/components/ui/textarea"
 import { DataTable, FilterSelect, type Column } from "@/components/shared/data-table"
 import { FormField } from "@/components/shared/form-field"
 import { StatusPill } from "@/components/shared/status-pill"
+import { createIdempotencyKey } from "@/lib/idempotency"
+import { kardpayErrorMessage } from "@/lib/kardpay/error-messages"
 import { statusLabels, virtualCards, type VirtualCard } from "@/lib/cards-data"
 import { blockHistory, type BlockEvent } from "@/lib/data/operations"
 import { cn } from "@/lib/utils"
+
+// NOTE : `card.reference` (ex. "VC-20261020-001") est la référence interne
+// mock de ce dépôt, PAS l'id de carte KardPay (un UUID renvoyé à l'émission,
+// section 10.3). Tant que lib/cards-data.ts reste fictif (plan d'adaptation,
+// étape 1), on l'utilise comme identifiant de carte faute de mieux ; à
+// remplacer par le vrai id KardPay dès que GET /cards alimente ce tableau
+// depuis le backend.
+async function callCardAction(action: "freeze" | "unfreeze", cardId: string) {
+  const res = await fetch(`/api/cards/${cardId}/${action}`, {
+    method: "POST",
+    headers: { "Idempotency-Key": createIdempotencyKey() },
+    cache: "no-store",
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    throw new Error(kardpayErrorMessage(data?.error, data?.message))
+  }
+  return data as { status?: string }
+}
 
 const reasons = [
   "Suspicion de fraude",
@@ -36,7 +57,14 @@ export function CardBlockingView() {
   const [history, setHistory] = useState(blockHistory)
   const [blocking, setBlocking] = useState<VirtualCard | null>(null)
   const [reason, setReason] = useState(reasons[0])
+  // Référence de la carte dont le freeze/unfreeze est en cours : désactive
+  // ses boutons pendant l'appel pour éviter un double-clic (qui créerait
+  // une 2e Idempotency-Key pour la même intention utilisateur).
+  const [busyRef, setBusyRef] = useState<string | null>(null)
 
+  // L'historique local reste optimiste/local pour l'instant : le plan
+  // d'adaptation (étape 7) prévoit de le remplacer par les événements reçus
+  // via le webhook card.status_changed côté backend, pas encore implémenté.
   function record(card: VirtualCard, action: BlockEvent["action"], why: string) {
     setCards((prev) =>
       prev.map((c) =>
@@ -58,16 +86,33 @@ export function CardBlockingView() {
     ])
   }
 
-  function confirmBlock() {
+  async function confirmBlock() {
     if (!blocking) return
-    record(blocking, "blocage", reason)
-    toast.success(`Carte **** ${blocking.last4} bloquée`, { description: reason })
-    setBlocking(null)
+    const card = blocking
+    setBusyRef(card.reference)
+    try {
+      await callCardAction("freeze", card.reference)
+      record(card, "blocage", reason)
+      toast.success(`Carte **** ${card.last4} bloquée`, { description: reason })
+      setBlocking(null)
+    } catch (e) {
+      toast.error("Blocage impossible", { description: e instanceof Error ? e.message : undefined })
+    } finally {
+      setBusyRef(null)
+    }
   }
 
-  function unblock(card: VirtualCard) {
-    record(card, "deblocage", "Vérification effectuée")
-    toast.success(`Carte **** ${card.last4} débloquée`)
+  async function unblock(card: VirtualCard) {
+    setBusyRef(card.reference)
+    try {
+      await callCardAction("unfreeze", card.reference)
+      record(card, "deblocage", "Vérification effectuée")
+      toast.success(`Carte **** ${card.last4} débloquée`)
+    } catch (e) {
+      toast.error("Déblocage impossible", { description: e instanceof Error ? e.message : undefined })
+    } finally {
+      setBusyRef(null)
+    }
   }
 
   const columns: Column<VirtualCard>[] = [
@@ -98,11 +143,17 @@ export function CardBlockingView() {
       className: "text-center",
       cell: (c) =>
         c.status === "bloquee" ? (
-          <Button size="xs" variant="outline" className="border-emerald-200 text-emerald-700 hover:bg-emerald-50" onClick={() => unblock(c)}>
-            <Unlock /> Débloquer
+          <Button
+            size="xs"
+            variant="outline"
+            className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+            disabled={busyRef === c.reference}
+            onClick={() => unblock(c)}
+          >
+            {busyRef === c.reference ? <Loader2 className="animate-spin" /> : <Unlock />} Débloquer
           </Button>
         ) : c.status === "active" ? (
-          <Button size="xs" variant="destructive" onClick={() => setBlocking(c)}>
+          <Button size="xs" variant="destructive" disabled={busyRef === c.reference} onClick={() => setBlocking(c)}>
             <Lock /> Bloquer
           </Button>
         ) : (
@@ -187,8 +238,13 @@ export function CardBlockingView() {
               </FormField>
               <DialogFooter>
                 <DialogClose render={<Button variant="outline" />}>Annuler</DialogClose>
-                <Button variant="destructive" className="bg-red-600 text-white hover:bg-red-700" onClick={confirmBlock}>
-                  <Lock /> Confirmer le blocage
+                <Button
+                  variant="destructive"
+                  className="bg-red-600 text-white hover:bg-red-700"
+                  disabled={busyRef === blocking.reference}
+                  onClick={confirmBlock}
+                >
+                  {busyRef === blocking.reference ? <Loader2 className="animate-spin" /> : <Lock />} Confirmer le blocage
                 </Button>
               </DialogFooter>
             </>

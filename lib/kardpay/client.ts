@@ -44,8 +44,16 @@ type KardPayRequestInit = {
 /**
  * Appelle un endpoint du Partner API, signé en KP1-HMAC (section 4).
  * `path` commence par "/partner/v1/...".
+ *
+ * Renvoie le status HTTP brut avec les données : certains endpoints (ex.
+ * POST /cards, section 10.3) répondent 201 (créé), 202 pending ou 202
+ * awaiting_funds — ce ne sont PAS des erreurs, l'appelant doit pouvoir
+ * distinguer les trois.
  */
-export async function kardpayFetch<T>(path: string, init: KardPayRequestInit = {}): Promise<T> {
+export async function kardpayFetch<T>(
+  path: string,
+  init: KardPayRequestInit = {}
+): Promise<{ status: number; data: T }> {
   const method = init.method ?? "GET"
   const bodyStr = init.body !== undefined ? JSON.stringify(init.body) : undefined
   const creds = credentialsFromEnv()
@@ -76,8 +84,12 @@ export async function kardpayFetch<T>(path: string, init: KardPayRequestInit = {
   if (!res.ok) {
     const code = data?.error?.code ?? "unknown_error"
     const message = data?.error?.message ?? "Erreur KardPay inattendue."
+    // Section 6.2 : une 5xx, ou une erreur détectée avant le début du
+    // traitement (insufficient_escrow_balance, product_unavailable, ...),
+    // libère la clé — mentionné ici pour que l'appelant sache qu'il peut,
+    // dans ces cas précis, réutiliser la même Idempotency-Key pour réessayer.
     throw new KardPayError(res.status, code, message)
   }
 
-  return data as T
+  return { status: res.status, data: data as T }
 }

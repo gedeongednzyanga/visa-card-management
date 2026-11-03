@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 import { NetworkLogo } from "@/components/cards/card-badges"
 import { VirtualCardVisual } from "@/components/cards/virtual-card-visual"
@@ -13,10 +14,15 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import { FilterSelect } from "@/components/shared/data-table"
 import { FormField } from "@/components/shared/form-field"
+import { createIdempotencyKey } from "@/lib/idempotency"
+import { kardpayErrorMessage } from "@/lib/kardpay/error-messages"
 import { networkLabels, type CardNetwork, type VirtualCard } from "@/lib/cards-data"
 import { accounts, accountTypeLabels, clients } from "@/lib/data/clients"
 import { formatAmount } from "@/lib/format"
 import { cn } from "@/lib/utils"
+
+// Réponse de POST /api/cards (relais de POST /partner/v1/cards, section 10.3).
+type IssueCardResponse = { status?: "pending" | "awaiting_funds" | "active"; id?: string }
 
 const verified = new Set(clients.filter((c) => c.kyc === "verifie" && c.active).map((c) => c.id))
 const eligibleAccounts = accounts.filter((a) => a.status === "actif" && verified.has(a.clientId))
@@ -41,8 +47,14 @@ export function IssueCardForm() {
     secure: true,
     subscriptions: false,
   })
+  const [submitting, setSubmitting] = useState(false)
+  // Une seule clé par intention d'émission : créée au premier clic, réutilisée
+  // sur un nouveau clic tant que la soumission précédente n'a pas réussi
+  // (doc KardPay section 6.4 — jamais régénérée pour une relance de la MÊME action).
+  const idemKeyRef = useRef<string | null>(null)
 
   const account = eligibleAccounts.find((a) => a.number === accountNumber)!
+  const client = clients.find((c) => c.id === account.clientId)!
   const expires = `20/10/${2026 + Number(validity)}`
   const limitError = Number(perTx) > Number(monthlyLimit)
 
@@ -62,16 +74,68 @@ export function IssueCardForm() {
     transactionCount: 0,
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (limitError) {
       toast.error("Le plafond par transaction dépasse le plafond mensuel")
       return
     }
-    toast.success(`Carte ${networkLabels[network]} émise pour ${account.holder}`, {
-      description: "Les données de la carte ont été envoyées au client par SMS sécurisé.",
-    })
-    router.push("/cartes-virtuelles")
+    if (network !== "visa" || account.currency !== "USD") {
+      // KardPay ne signe qu'un seul produit : access-finance-virtual-usd
+      // (Visa, USD — section 9). Les autres combinaisons existent encore
+      // dans cette UI mock mais ne peuvent pas être émises via l'API tant
+      // qu'elles ne sont pas retirées (plan d'adaptation, étape 3).
+      toast.error("Produit non disponible chez KardPay", {
+        description: "Seule une carte Visa en USD peut être émise pour l'instant (produit access-finance-virtual-usd).",
+      })
+      return
+    }
+
+    if (!idemKeyRef.current) idemKeyRef.current = createIdempotencyKey()
+    setSubmitting(true)
+    try {
+      const res = await fetch("/api/cards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idemKeyRef.current },
+        cache: "no-store",
+        body: JSON.stringify({
+          email: client.email,
+          phone: client.phone || undefined,
+          card_name: `${account.holder} — carte virtuelle`,
+        }),
+      })
+      const data = (await res.json().catch(() => null)) as (IssueCardResponse & { error?: string; message?: string }) | null
+
+      if (!res.ok) {
+        toast.error("Émission impossible", { description: kardpayErrorMessage(data?.error, data?.message) })
+        return
+      }
+
+      // Succès décidé (card active/pending créée) : on peut repartir d'une
+      // nouvelle clé pour la prochaine émission.
+      idemKeyRef.current = null
+
+      if (data?.status === "awaiting_funds") {
+        toast.info(`Carte ${networkLabels[network]} en file d'attente pour ${account.holder}`, {
+          description: "L'escrow KardPay n'a pas encore les fonds disponibles ; la carte sera émise automatiquement dès que possible.",
+        })
+      } else if (data?.status === "pending") {
+        toast.info(`Carte ${networkLabels[network]} en cours de traitement pour ${account.holder}`, {
+          description: "L'émetteur n'a pas encore confirmé ; le statut se mettra à jour automatiquement.",
+        })
+      } else {
+        toast.success(`Carte ${networkLabels[network]} émise pour ${account.holder}`, {
+          description: "Les données de la carte ont été envoyées au client par SMS sécurisé.",
+        })
+      }
+      router.push("/cartes-virtuelles")
+    } catch {
+      // Erreur réseau / 5xx : la doc (6.4) recommande de réessayer avec la
+      // MÊME clé, donc on la garde dans idemKeyRef pour le prochain clic.
+      toast.error("Service carte injoignable", { description: "Vérifiez la connexion et réessayez." })
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -98,6 +162,9 @@ export function IssueCardForm() {
               <span className="text-muted-foreground">{accountTypeLabels[account.type]} · </span>
               Solde disponible :{" "}
               <span className="font-semibold">{formatAmount(account.balance, account.currency)}</span>
+              <span className="mt-1 block text-muted-foreground">
+                Email titulaire (requis par KardPay) : <span className="text-foreground">{client.email}</span>
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -127,6 +194,10 @@ export function IssueCardForm() {
               ))}
             </RadioGroup>
 
+            <p className="text-xs text-muted-foreground">
+              Les plafonds ci-dessous sont des limites internes Accès Finance : KardPay n&apos;a pas de notion de
+              plafond par carte, elles ne lui sont pas envoyées.
+            </p>
             <div className="grid gap-4 sm:grid-cols-3">
               <FormField label={`Plafond mensuel (${account.currency})`} htmlFor="monthly">
                 <Input id="monthly" type="number" min={1} value={monthlyLimit} onChange={(e) => setMonthlyLimit(e.target.value)} required />
@@ -193,7 +264,8 @@ export function IssueCardForm() {
                 </div>
               ))}
             </dl>
-            <Button type="submit" className="h-10 w-full">
+            <Button type="submit" className="h-10 w-full" disabled={submitting}>
+              {submitting ? <Loader2 className="animate-spin" /> : null}
               Émettre la carte
             </Button>
           </CardContent>

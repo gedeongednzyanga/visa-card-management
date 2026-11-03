@@ -16,35 +16,20 @@
 //    Next.js, une fois le backend du plan technique en place (séparation des
 //    responsabilités : ce fichier n'est qu'un squelette de démonstration).
 
-import { cookies } from "next/headers"
 import { NextResponse, type NextRequest } from "next/server"
-import { ApiError, apiFetch } from "@/lib/api"
 import { KardPayError, kardpayFetch } from "@/lib/kardpay/client"
-import { ACCESS_COOKIE } from "@/lib/session"
+import { requireDashboardSession } from "@/lib/require-session"
 
 type SensitiveCardData = { pan: string; cvv: string; expiry_mmyy: string }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const token = (await cookies()).get(ACCESS_COOKIE)?.value
-
-  if (!token) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
-
-  // Vérifie que la session dashboard est valide avant de révéler quoi que ce soit.
-  try {
-    await apiFetch("/auth/me", { token })
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 401) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-    }
-    return NextResponse.json({ error: "auth_unavailable" }, { status: 503 })
-  }
+  const session = await requireDashboardSession()
+  if (!session.ok) return session.response
 
   const { id } = await params
 
   try {
-    const data = await kardpayFetch<SensitiveCardData>(`/partner/v1/cards/${id}/sensitive`)
+    const { data } = await kardpayFetch<SensitiveCardData>(`/partner/v1/cards/${id}/sensitive`)
     return NextResponse.json(data, {
       // Jamais mis en cache — ni par le navigateur, ni par un proxy intermédiaire.
       headers: { "Cache-Control": "no-store", Pragma: "no-cache" },
