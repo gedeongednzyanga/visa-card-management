@@ -68,6 +68,18 @@ export async function POST(req: NextRequest) {
       requestId: crypto.randomUUID(),
     })
 
+    if (!accounts.data?.accounts) {
+      // banksoftFetch ne lève que si `success === false` ou `error` est présent
+      // (voir lib/banksoft/client.ts) — ce JSON a donc une forme différente de
+      // ce qu'on attendait. Visible dans le terminal pour diagnostic, jamais
+      // renvoyé au navigateur tel quel (peut contenir des données réelles).
+      console.error("[cbs/lookup] GetClientAccounts : forme de réponse inattendue —", JSON.stringify(accounts))
+      return NextResponse.json(
+        { error: "unexpected_response", message: "GetClientAccounts a répondu dans une forme inattendue — voir le terminal du serveur." },
+        { status: 502 }
+      )
+    }
+
     return NextResponse.json(
       {
         client: details.data,
