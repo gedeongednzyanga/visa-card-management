@@ -84,7 +84,10 @@ export function CbsTestView() {
               <Input
                 id="clientId"
                 value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
+                // Ce composant Input (Base UI) ignore silencieusement onChange en
+                // mode contrôlé : il faut onValueChange, sinon le champ se remplit
+                // visuellement mais l'état React ne se met jamais à jour.
+                onValueChange={setClientId}
                 placeholder="ex. 200000004"
               />
             </div>

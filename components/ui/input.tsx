@@ -2,7 +2,15 @@ import * as React from "react"
 import { Input as InputPrimitive } from "@base-ui/react/input"
 import { cn } from "cn"
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+// IMPORTANT : ce composant rend l'Input de Base UI, pas un <input> HTML brut.
+// En mode contrôlé, Base UI ignore silencieusement un onChange classique et
+// n'appelle que `onValueChange(value, eventDetails)` — voir
+// node_modules/@base-ui/react/field/control/FieldControl.js. Typer ces props
+// comme React.ComponentProps<"input"> masquait onValueChange : un onChange
+// passé ici compile sans erreur mais ne fait jamais rien (le champ se remplit
+// visuellement, l'état React ne se met jamais à jour). Toujours utiliser
+// onValueChange pour un Input contrôlé dans cette app.
+function Input({ className, type, ...props }: React.ComponentProps<typeof InputPrimitive>) {
   return (
     <InputPrimitive
       type={type}
