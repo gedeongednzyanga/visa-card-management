@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   ArrowLeftRight,
   Copy,
@@ -8,6 +8,7 @@ import {
   EyeOff,
   FileText,
   KeyRound,
+  Loader2,
   Lock,
   Pencil,
   RefreshCw,
@@ -15,6 +16,7 @@ import {
   Unlock,
   X,
 } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import {
@@ -36,6 +38,75 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
+// Révélation du CVV à la demande, via GET /api/cards/{id}/sensitive côté backend
+// (qui relaie KardPay, section 10.9 de leur doc). Le CVV n'existe nulle part
+// ailleurs dans le frontend : pas de store, pas de cache, rien dans cards-data.ts.
+// Il disparaît tout seul après REVEAL_SECONDS, et au démontage du composant.
+const REVEAL_SECONDS = 15
+
+function CvvReveal({ cardId }: { cardId: string }) {
+  const [cvv, setCvv] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function clearHideTimer() {
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    hideTimer.current = null
+  }
+
+  async function reveal() {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/cards/${cardId}/sensitive`, { cache: "no-store" })
+      if (!res.ok) {
+        toast.error("Impossible de récupérer le CVV", {
+          description: "Le service carte n'est pas encore connecté.",
+        })
+        return
+      }
+      const data = (await res.json()) as { cvv: string }
+      setCvv(data.cvv)
+      clearHideTimer()
+      hideTimer.current = setTimeout(() => setCvv(null), REVEAL_SECONDS * 1000)
+    } catch {
+      toast.error("Service carte injoignable")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function hide() {
+    clearHideTimer()
+    setCvv(null)
+  }
+
+  useEffect(() => clearHideTimer, [])
+
+  return (
+    <span className="flex items-center gap-2">
+      <span className="w-8 font-mono">{cvv ?? "***"}</span>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        disabled={loading}
+        onClick={cvv ? hide : reveal}
+        aria-label={cvv ? "Masquer le CVV" : "Afficher le CVV"}
+      >
+        {loading ? <Loader2 className="animate-spin" /> : cvv ? <EyeOff /> : <Eye />}
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        disabled={!cvv}
+        aria-label="Copier le CVV"
+        onClick={() => cvv && navigator.clipboard.writeText(cvv)}
+      >
+        <Copy />
+      </Button>
+    </span>
+  )
+}
+
 const quickActions = [
   { label: "Bloquer la carte", icon: Lock, className: "border-red-200 bg-red-50/60 text-red-600 hover:bg-red-50" },
   { label: "Débloquer", icon: Unlock, className: "border-emerald-200 bg-emerald-50/60 text-emerald-700 hover:bg-emerald-50" },
@@ -54,7 +125,6 @@ export function CardDetails({
   card: VirtualCard
   onClose: () => void
 }) {
-  const [showCvv, setShowCvv] = useState(false)
   const spentRate = Math.round((card.monthlySpent / card.monthlyLimit) * 1000) / 10
 
   return (
@@ -86,20 +156,7 @@ export function CardDetails({
           <InfoRow label="Date d'émission">{card.issuedAt}</InfoRow>
           <InfoRow label="Date d'expiration">{card.expiresAt}</InfoRow>
           <InfoRow label="CVV">
-            <span className="flex items-center gap-2">
-              <span className="w-8 font-mono">{showCvv ? "742" : "***"}</span>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => setShowCvv((v) => !v)}
-                aria-label={showCvv ? "Masquer le CVV" : "Afficher le CVV"}
-              >
-                {showCvv ? <EyeOff /> : <Eye />}
-              </Button>
-              <Button variant="ghost" size="icon-xs" aria-label="Copier le CVV">
-                <Copy />
-              </Button>
-            </span>
+            <CvvReveal cardId={card.reference} />
           </InfoRow>
         </dl>
       </section>
