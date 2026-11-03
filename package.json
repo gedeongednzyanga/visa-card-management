@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "kardpay:smoke-test": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/kardpay-smoke-test.ts"
+    "kardpay:smoke-test": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/kardpay-smoke-test.ts",
+    "banksoft:smoke-test": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/banksoft-smoke-test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
