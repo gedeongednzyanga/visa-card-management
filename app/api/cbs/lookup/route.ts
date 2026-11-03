@@ -4,10 +4,18 @@
 // Le vrai flux (émission de carte, financement) passera par le futur
 // backend, pas par ce relais Next.js (plan technique, section "Modèle
 // opérationnel", section 7).
+//
+// La session dashboard n'est exigée qu'en production. En développement
+// local, le service acces-register (authentification) n'est pas toujours
+// disponible pour qui teste uniquement l'intégration CBS — ça n'a aucun
+// rapport avec ce qu'on vérifie ici. Ne jamais étendre cette exception à
+// une route qui touche de vraies opérations (émission, transfert).
 
 import { NextResponse, type NextRequest } from "next/server"
 import { BankSoftError, banksoftFetch } from "@/lib/banksoft/client"
 import { requireDashboardSession } from "@/lib/require-session"
+
+const SESSION_REQUIRED = process.env.NODE_ENV === "production"
 
 type ClientDetails = {
   success: boolean
@@ -31,8 +39,12 @@ type ClientAccounts = {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await requireDashboardSession()
-  if (!session.ok) return session.response
+  if (SESSION_REQUIRED) {
+    const session = await requireDashboardSession()
+    if (!session.ok) return session.response
+  } else {
+    console.warn("[cbs/lookup] Session dashboard non vérifiée (hors production) — route de test uniquement.")
+  }
 
   let body: { clientId?: string }
   try {
