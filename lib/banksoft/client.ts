@@ -91,18 +91,28 @@ export async function banksoftFetch<T>(
     throw new BankSoftError(res.status, "decrypt_error", err instanceof Error ? err.message : "Déchiffrement échoué.")
   }
 
-  let data: Record<string, unknown>
+  let data: unknown
   try {
     data = JSON.parse(plaintext)
+    // Confirmé le 03/11/2026 contre l'API réelle : le payload déchiffré est
+    // encodé en JSON deux fois (une chaîne JSON contenant une chaîne JSON).
+    // Un seul JSON.parse donne donc une chaîne de caractères — toujours un
+    // JSON valide, d'où un faux "succès" silencieux — pas l'objet attendu.
+    if (typeof data === "string") data = JSON.parse(data)
   } catch {
     throw new BankSoftError(res.status, "invalid_json", "Réponse déchiffrée non-JSON.")
   }
 
-  if (data.success === false || data.error) {
-    const message = typeof data.message === "string" ? data.message : String(data.error ?? "Erreur CBS inattendue.")
-    const code = typeof data.code === "string" || typeof data.code === "number" ? String(data.code) : "cbs_error"
+  if (typeof data !== "object" || data === null) {
+    throw new BankSoftError(res.status, "invalid_json", "Réponse déchiffrée d'une forme inattendue (ni objet, ni chaîne JSON imbriquée).")
+  }
+  const obj = data as Record<string, unknown>
+
+  if (obj.success === false || obj.error) {
+    const message = typeof obj.message === "string" ? obj.message : String(obj.error ?? "Erreur CBS inattendue.")
+    const code = typeof obj.code === "string" || typeof obj.code === "number" ? String(obj.code) : "cbs_error"
     throw new BankSoftError(res.status, code, message)
   }
 
-  return data as T
+  return obj as T
 }

@@ -56,7 +56,19 @@ async function call(method: string, body: object) {
       iv: process.env.BANKSOFT_AES_IV!,
     })
     console.log("✓ Déchiffré :", plaintext)
-    const parsed = JSON.parse(plaintext)
+    // Confirmé le 03/11/2026 : le payload déchiffré est encodé en JSON deux
+    // fois (une chaîne JSON contenant une chaîne JSON). Un seul JSON.parse
+    // donne une chaîne de caractères — toujours un JSON "valide", d'où un
+    // faux succès silencieux si on ne vérifie pas le type du résultat.
+    let parsed = JSON.parse(plaintext)
+    if (typeof parsed === "string") {
+      console.log("  (encodé JSON deux fois — second parse appliqué)")
+      parsed = JSON.parse(parsed)
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+      console.warn(`⚠ Déchiffré, mais le résultat n'est ni un objet ni une chaîne JSON imbriquée (type: ${typeof parsed}).`)
+      return null
+    }
     if (parsed.error || parsed.success === false) {
       console.warn(`⚠ Réponse applicative en erreur malgré HTTP 200 : ${parsed.message ?? parsed.error}`)
     }
