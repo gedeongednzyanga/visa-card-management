@@ -79,6 +79,14 @@ export async function POST(req: NextRequest) {
     if (e instanceof BankSoftError) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: e.status || 502 })
     }
-    return NextResponse.json({ error: "banksoft_unavailable" }, { status: 502 })
+    // Une erreur qui n'est PAS un BankSoftError vient d'avant l'appel réseau
+    // (ex. variable d'environnement manquante — voir cryptoConfig()/headers()
+    // dans lib/banksoft/client.ts) : message inclus, utile en diagnostic,
+    // sans secret dedans (ces erreurs ne citent que des NOMS de variables).
+    console.error("[cbs/lookup]", e)
+    return NextResponse.json(
+      { error: "banksoft_unavailable", message: e instanceof Error ? e.message : String(e) },
+      { status: 502 }
+    )
   }
 }
