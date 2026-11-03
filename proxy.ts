@@ -11,10 +11,19 @@ import {
 
 const PUBLIC_PATHS = ["/connexion", "/mot-de-passe-oublie"]
 
+// Page de test CBS BankSoft (voir app/test-cbs + app/api/cbs/lookup) : pas
+// de session dashboard exigée, seulement en dehors de production — même
+// logique que SESSION_REQUIRED dans app/api/cbs/lookup/route.ts. acces-register
+// n'a aucun rapport avec ce qu'on y vérifie.
+const DEV_ONLY_PUBLIC_PATHS = ["/test-cbs", "/api/cbs"]
+
 // Protège les pages du tableau de bord et renouvelle le jeton d'accès expiré.
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) return NextResponse.next()
+  if (process.env.NODE_ENV !== "production" && DEV_ONLY_PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+    return NextResponse.next()
+  }
 
   const accessToken = request.cookies.get(ACCESS_COOKIE)?.value
   if (accessToken && !isTokenExpired(accessToken)) return NextResponse.next()
