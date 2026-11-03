@@ -7,17 +7,66 @@
 //
 //   npm run banksoft:smoke-test
 //
-// Ce script ne devine rien côté serveur : il appelle GetClientdetails
-// avec un clientId de test, affiche la réponse brute (pour diagnostic),
-// puis tente de la déchiffrer avec l'hypothèse AES-256-CBC/UTF-8/PKCS7/
-// Base64 documentée dans lib/banksoft/crypto.ts. Si le déchiffrement
-// échoue, le message d'erreur du module crypto liste les points à
-// revoir dans l'ordre le plus probable.
+// Ce script ne devine rien côté serveur : il appelle GetClientdetails puis
+// GetClientAccounts avec un clientId réel, affiche chaque réponse brute
+// (pour diagnostic), puis tente de la déchiffrer avec l'hypothèse
+// AES-256-CBC/UTF-8/PKCS7/Base64 documentée dans lib/banksoft/crypto.ts.
+// Si le déchiffrement échoue, le message d'erreur du module crypto liste
+// les points à revoir dans l'ordre le plus probable.
 //
-// Ne lit JAMAIS un secret depuis un argument de ligne de commande : tout
-// vient de l'environnement (.env.local, jamais commité).
+// Usage :
+//   npm run banksoft:smoke-test -- 200000007
+// (le clientId n'est pas un secret — c'est un identifiant de compte test,
+// pas une clé ni un token — donc il peut être passé en argument ; les
+// vrais secrets, eux, viennent toujours de l'environnement.)
 
 import { decryptBankSoftPayload } from "../lib/banksoft/crypto.ts"
+
+async function call(method: string, body: object) {
+  const baseUrl = process.env.BANKSOFT_BASE_URL!.replace(/\/+$/, "")
+  const bodyJson = JSON.stringify(body)
+  console.log(`\n→ POST ${baseUrl}/${method}`)
+  console.log(`  body (non chiffré, cette méthode n'en a pas besoin d'après la doc) : ${bodyJson}`)
+
+  const res = await fetch(`${baseUrl}/${method}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.BANKSOFT_BEARER_TOKEN}`,
+      "x-api-key": process.env.BANKSOFT_API_KEY!,
+      "Content-Type": "application/json",
+    },
+    body: bodyJson,
+  })
+
+  const raw = await res.text()
+  console.log(`✓ HTTP ${res.status}`)
+  console.log(`  réponse brute (${raw.length} caractères) : ${raw.slice(0, 200)}${raw.length > 200 ? "…" : ""}`)
+
+  if (res.status !== 200) {
+    console.error("✗ Statut non-200 — avant de toucher au chiffrement, vérifiez :")
+    console.error("  401 → Bearer Token ou x-api-key invalide.")
+    console.error("  403 → IP non autorisée (voir le point WAN IP / allowlist, plan technique section 7).")
+    console.error("  404 → mauvaise URL/méthode ASMX.")
+    return null
+  }
+
+  try {
+    const plaintext = decryptBankSoftPayload(raw.trim().replace(/^"|"$/g, ""), {
+      key: process.env.BANKSOFT_AES_KEY!,
+      iv: process.env.BANKSOFT_AES_IV!,
+    })
+    console.log("✓ Déchiffré :", plaintext)
+    const parsed = JSON.parse(plaintext)
+    if (parsed.error || parsed.success === false) {
+      console.warn(`⚠ Réponse applicative en erreur malgré HTTP 200 : ${parsed.message ?? parsed.error}`)
+    }
+    return parsed
+  } catch (err) {
+    console.error("✗ Déchiffrement/parsing échoué :", err instanceof Error ? err.message : err)
+    console.error("  Voir les commentaires de decryptBankSoftPayload (lib/banksoft/crypto.ts) pour les pistes à essayer.")
+    return null
+  }
+}
 
 async function main() {
   const required = ["BANKSOFT_BASE_URL", "BANKSOFT_API_KEY", "BANKSOFT_BEARER_TOKEN", "BANKSOFT_AES_KEY", "BANKSOFT_AES_IV"]
@@ -28,55 +77,13 @@ async function main() {
     process.exit(1)
   }
 
-  const baseUrl = process.env.BANKSOFT_BASE_URL!.replace(/\/+$/, "")
-  const requestId = `SMOKE-${Date.now()}`
-  const body = JSON.stringify({ clientId: "CLI000001", requestId })
+  const clientId = process.argv[2] ?? "CLI000001"
+  console.log(`Utilisation du clientId : ${clientId}`)
 
-  console.log(`→ POST ${baseUrl}/GetClientdetails`)
-  console.log(`  body (non chiffré, GetClientdetails n'en a pas besoin d'après la doc) : ${body}`)
+  const details = await call("GetClientdetails", { clientId, requestId: `SMOKE-${Date.now()}` })
+  if (!details) process.exit(1)
 
-  const res = await fetch(`${baseUrl}/GetClientdetails`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.BANKSOFT_BEARER_TOKEN}`,
-      "x-api-key": process.env.BANKSOFT_API_KEY!,
-      "Content-Type": "application/json",
-    },
-    body,
-  })
-
-  const raw = await res.text()
-  console.log(`\n✓ HTTP ${res.status}`)
-  console.log(`  réponse brute (${raw.length} caractères) : ${raw.slice(0, 200)}${raw.length > 200 ? "…" : ""}`)
-
-  if (res.status !== 200) {
-    console.error("\n✗ Statut non-200 — avant de toucher au chiffrement, vérifiez :")
-    console.error("  401 → Bearer Token ou x-api-key invalide.")
-    console.error("  403 → IP non autorisée (voir le point WAN IP / allowlist, plan technique section 7).")
-    console.error("  404 → mauvaise URL/méthode ASMX.")
-    process.exit(1)
-  }
-
-  console.log("\n→ Tentative de déchiffrement (hypothèse AES-256-CBC/UTF-8/PKCS7/Base64)…")
-  try {
-    const plaintext = decryptBankSoftPayload(raw.trim().replace(/^"|"$/g, ""), {
-      key: process.env.BANKSOFT_AES_KEY!,
-      iv: process.env.BANKSOFT_AES_IV!,
-    })
-    console.log("✓ Déchiffrement réussi, contenu :")
-    console.log(plaintext)
-    try {
-      JSON.parse(plaintext)
-      console.log("✓ Le résultat est un JSON valide — l'hypothèse de chiffrement semble correcte.")
-    } catch {
-      console.warn("⚠ Déchiffré, mais le résultat n'est pas du JSON valide — l'hypothèse est probablement fausse malgré l'absence d'erreur.")
-    }
-  } catch (err) {
-    console.error("✗ Déchiffrement échoué :", err instanceof Error ? err.message : err)
-    console.error("  Voir les commentaires de decryptBankSoftPayload (lib/banksoft/crypto.ts) pour les pistes à essayer.")
-    console.error("  Si la réponse brute ci-dessus ressemble déjà à du JSON lisible, la réponse n'est peut-être pas chiffrée du tout pour cette méthode.")
-    process.exit(1)
-  }
+  await call("GetClientAccounts", { clientId, requestId: `SMOKE-${Date.now()}-ACC` })
 }
 
 main()
