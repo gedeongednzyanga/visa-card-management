@@ -72,11 +72,14 @@ test("le client est débité de la recharge + frais, la carte reçoit la recharg
   assert.deepEqual(kardpay.issueAmounts, [10_000])
 })
 
-test("échec d'émission : remboursement intégral, frais compris", async () => {
-  const { orch, submit, cbs, kardpay } = setup(schedule())
+test("échec d'émission : le montant à rembourser est la recharge + les frais, intégralement", async () => {
+  const { orch, submit, kardpay, cbs } = setup(schedule())
   kardpay.issueScript = ["permanent"]
   const done = await orch.run((await submit(10_000)).id)
-  assert.equal(done.status, "failed_refunded")
+  assert.equal(done.status, "refund_due")
+  assert.equal(done.pricing.totalDebitCents, 10_500) // ce que la comptabilité doit créditer
+  assert.equal(cbs.balance(ACCOUNT), 100_000 - 10_500)
+  cbs.creditManually(ACCOUNT, done.pricing.totalDebitCents)
   assert.equal(cbs.balance(ACCOUNT), 100_000)
 })
 

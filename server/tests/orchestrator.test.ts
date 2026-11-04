@@ -160,53 +160,65 @@ test("KardPay réessayable : même Idempotency-Key à chaque essai, une seule ca
   assert.equal(kardpay.cards.size, 1)
 })
 
-test("KardPay réessayable trop longtemps : remboursement", async () => {
+test("KardPay réessayable trop longtemps : remboursement dû à la comptabilité, rien d'automatique", async () => {
   const { orch, submit, kardpay, cbs } = setup({ maxAttempts: 2 })
   kardpay.issueScript = ["retryable", "retryable"]
   const r = await submit()
   await orch.advance(r.id) // débit
   await orch.advance(r.id) // émission 1
   const s = await orch.advance(r.id) // émission 2 : épuisé
-  assert.equal(s.status, "refund_pending")
-  const done = await orch.run(r.id)
-  assert.equal(done.status, "failed_refunded")
-  assert.equal(cbs.balance(ACCOUNT), 100_000)
+  assert.equal(s.status, "refund_due")
+  assert.equal(cbs.balance(ACCOUNT), 95_000) // le client reste débité tant que la comptabilité n'a pas crédité
+  assert.equal((await orch.refundsDue()).length, 1)
 })
 
-test("KardPay refuse définitivement : remboursement du client avec un requestId distinct", async () => {
+test("KardPay refuse définitivement : remboursement dû, l'automate ne touche plus au CBS", async () => {
   const { orch, submit, kardpay, cbs } = setup()
   kardpay.issueScript = ["permanent"]
   const r = await submit()
   const done = await orch.run(r.id)
-  assert.equal(done.status, "failed_refunded")
-  assert.equal(cbs.balance(ACCOUNT), 100_000)
-  assert.deepEqual([...cbs.refunds.keys()], [`${r.id}-refund`])
-  assert.ok(done.cbsRefundRef)
-})
-
-test("réponse du remboursement perdue : needs_review, pas de second remboursement", async () => {
-  const { orch, submit, kardpay, cbs } = setup()
-  kardpay.issueScript = ["permanent"]
-  cbs.refundScript = ["lost_response"]
-  const r = await submit()
-  const done = await orch.run(r.id)
-  assert.equal(done.status, "needs_review")
+  assert.equal(done.status, "refund_due")
+  assert.equal(done.lastError?.code, "product_unavailable")
   await orch.tick()
-  assert.equal(cbs.refundCalls, 1)
-  assert.equal(cbs.balance(ACCOUNT), 100_000) // remboursé une seule fois, pas deux
+  await orch.tick()
+  assert.equal(cbs.debitCalls, 1) // aucun autre appel CBS
+  assert.equal(cbs.balance(ACCOUNT), 95_000)
+  assert.equal((await orch.advance(r.id)).status, "refund_due") // attente humaine : advance ne fait rien
 })
 
-test("remboursement CBS indisponible trop longtemps : needs_review, le client reste débité", async () => {
-  const { orch, submit, kardpay, cbs } = setup({ maxAttempts: 2 })
+test("la comptabilité confirme le remboursement : référence et auteur tracés, rejeu inoffensif", async () => {
+  const { orch, submit, kardpay, cbs } = setup()
   kardpay.issueScript = ["permanent"]
-  cbs.refundScript = ["not_applied", "not_applied"]
   const r = await submit()
-  await orch.advance(r.id)
-  await orch.advance(r.id)
-  await orch.advance(r.id)
-  const s = await orch.advance(r.id)
-  assert.equal(s.status, "needs_review")
-  assert.equal(cbs.balance(ACCOUNT), 95_000)
+  await orch.run(r.id)
+  cbs.creditManually(ACCOUNT, 5_000) // écriture passée à la main dans le CBS
+  const done = await orch.confirmRefund(r.id, { reference: " CRD-4412 ", confirmedBy: "comptable-1" })
+  assert.equal(done.status, "failed_refunded")
+  assert.equal(done.cbsRefundRef, "CRD-4412")
+  assert.match(done.history.at(-1)!.note, /comptable-1/)
+  assert.equal((await orch.refundsDue()).length, 0)
+  // même confirmation rejouée : rien ne change
+  const again = await orch.confirmRefund(r.id, { reference: "CRD-4412", confirmedBy: "comptable-1" })
+  assert.equal(again.version, done.version)
+  // une autre référence sur une demande déjà remboursée est refusée (risque de double crédit)
+  await assert.rejects(orch.confirmRefund(r.id, { reference: "CRD-9999", confirmedBy: "comptable-1" }), (e: unknown) => e instanceof ValidationError && e.code === "already_refunded")
+})
+
+test("confirmation de remboursement : contrôles (référence, état, quatre yeux)", async () => {
+  const { orch, submit, kardpay } = setup()
+  kardpay.issueScript = ["permanent"]
+  const failed = await submit()
+  await orch.run(failed.id)
+  const fine = await submit()
+  await orch.run(fine.id) // émise normalement
+
+  await assert.rejects(orch.confirmRefund(failed.id, { reference: "  ", confirmedBy: "c" }), (e: unknown) => e instanceof ValidationError && e.code === "reference_required")
+  await assert.rejects(orch.confirmRefund(failed.id, { reference: "R1", confirmedBy: "" }), (e: unknown) => e instanceof ValidationError && e.code === "confirmer_required")
+  // l'auteur de la demande ne peut pas confirmer son propre remboursement
+  await assert.rejects(orch.confirmRefund(failed.id, { reference: "R1", confirmedBy: "agent-1" }), (e: unknown) => e instanceof ValidationError && e.code === "same_person")
+  // une carte émise n'a aucun remboursement à confirmer
+  await assert.rejects(orch.confirmRefund(fine.id, { reference: "R1", confirmedBy: "comptable-1" }), (e: unknown) => e instanceof ValidationError && e.code === "not_refundable")
+  assert.equal((await orch.refundsDue()).length, 1)
 })
 
 test("émission acceptée (202) : attente, puis webhook card_issued ; rejeu du même événement ignoré", async () => {
@@ -225,29 +237,31 @@ test("émission acceptée (202) : attente, puis webhook card_issued ; rejeu du m
   assert.equal(after.history.filter((h) => h.status === "issued").length, 1)
 })
 
-test("webhook card_failed : remboursement déclenché par le worker", async () => {
+test("webhook card_failed : remboursement dû à la comptabilité", async () => {
   const { orch, submit, kardpay, cbs } = setup()
   kardpay.issueScript = ["accepted"]
   const r = await submit()
   await orch.run(r.id)
   assert.equal(await orch.handleWebhook({ eventId: "evt-2", kind: "card_failed", cardId: "card_1" }), "processed")
   await orch.tick()
-  const done = await orch.advance(r.id)
-  assert.equal(done.status, "failed_refunded")
-  assert.equal(cbs.balance(ACCOUNT), 100_000)
+  assert.equal((await orch.advance(r.id)).status, "refund_due")
+  assert.equal(cbs.debitCalls, 1)
+  assert.equal((await orch.refundsDue()).map((x) => x.id).join(), r.id)
 })
 
-test("webhook card_issued reçu après un remboursement : alerte needs_review (perte possible)", async () => {
-  const { orch, submit, kardpay } = setup()
-  kardpay.issueScript = ["accepted"]
-  const r = await submit()
-  await orch.run(r.id)
-  await orch.handleWebhook({ eventId: "evt-3", kind: "card_failed", cardId: "card_1" })
-  await orch.run(r.id)
-  await orch.handleWebhook({ eventId: "evt-4", kind: "card_issued", cardId: "card_1" })
-  const s = await orch.advance(r.id)
-  assert.equal(s.status, "needs_review")
-  assert.equal(s.lastError?.code, "issued_after_refund")
+test("webhook card_issued alors que le remboursement est dû ou déjà fait : alerte needs_review (perte possible)", async () => {
+  for (const alreadyRefunded of [false, true]) {
+    const { orch, submit, kardpay } = setup()
+    kardpay.issueScript = ["accepted"]
+    const r = await submit()
+    await orch.run(r.id)
+    await orch.handleWebhook({ eventId: "evt-3", kind: "card_failed", cardId: "card_1" })
+    if (alreadyRefunded) await orch.confirmRefund(r.id, { reference: "CRD-1", confirmedBy: "comptable-1" })
+    await orch.handleWebhook({ eventId: "evt-4", kind: "card_issued", cardId: "card_1" })
+    const s = await orch.advance(r.id)
+    assert.equal(s.status, "needs_review")
+    assert.equal(s.lastError?.code, "issued_after_refund")
+  }
 })
 
 test("webhook non rattachable : 'unmatched' et NON marqué comme vu (redélivrance possible)", async () => {

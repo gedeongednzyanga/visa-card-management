@@ -13,15 +13,18 @@ export type CardRequestStatus =
   | "debited" // CBS débité, émission KardPay à faire
   | "awaiting_issuer" // KardPay a accepté (202), on attend le webhook
   | "issued" // carte émise — terminal
-  | "refund_pending" // échec définitif de l'émission : remboursement CBS à faire
-  | "failed_refunded" // échec, client remboursé — terminal
+  | "refund_due" // échec définitif de l'émission : la comptabilité doit créditer le client (manuel)
+  | "failed_refunded" // échec, remboursement confirmé par la comptabilité — terminal
   | "needs_review" // intervention humaine requise — terminal pour l'automate
   | "rejected" // refusée avant tout débit — terminal
 
 export const TERMINAL_STATUSES: readonly CardRequestStatus[] = ["issued", "failed_refunded", "needs_review", "rejected"]
 
+/** États que l'automate fait avancer seul. `refund_due` attend un humain (comptabilité), `needs_review` aussi. */
+export const AUTOMATIC_STATUSES: readonly CardRequestStatus[] = ["requested", "debited", "awaiting_issuer"]
+
 export interface RequestError {
-  step: "validation" | "debit" | "issue" | "refund" | "webhook" | "timeout"
+  step: "validation" | "debit" | "issue" | "webhook" | "timeout"
   code: string
   message: string
   at: string
@@ -71,8 +74,8 @@ export interface CardRequest {
   /**
    * UUID unique de l'opération. Sert de `requestId` pour le débit CBS ET
    * d'`Idempotency-Key` pour KardPay : un rejeu ne peut ni débiter ni émettre
-   * deux fois. Le remboursement CBS utilise `${id}-refund` (le CBS rejette
-   * tout requestId déjà vu).
+   * deux fois. Le remboursement n'est pas automatisé : la comptabilité crédite
+   * le client à la main dans le CBS puis le confirme (voir confirmRefund).
    */
   id: string
   /** UUID généré par l'interface une fois par soumission de formulaire : évite le double clic. */
@@ -86,9 +89,10 @@ export interface CardRequest {
   pricing: AppliedPricing
   status: CardRequestStatus
   cbsDebitRef?: string
+  /** Référence CBS du crédit passé à la main par la comptabilité. */
   cbsRefundRef?: string
   kardpayCardId?: string
-  attempts: { debit: number; issue: number; refund: number }
+  attempts: { debit: number; issue: number }
   lastError?: RequestError
   history: HistoryEntry[]
   /** Contrôle de concurrence optimiste : incrémenté à chaque sauvegarde. */

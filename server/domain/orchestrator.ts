@@ -1,5 +1,5 @@
 import { ConflictError } from "./ports.ts"
-import type { CbsDebitResult, CbsPort, CbsRefundResult, IssueResult, KardPayPort, PricingPort, RequestRepository } from "./ports.ts"
+import type { CbsDebitResult, CbsPort, IssueResult, KardPayPort, PricingPort, RequestRepository } from "./ports.ts"
 import { computeCharges } from "./pricing.ts"
 import { TERMINAL_STATUSES } from "./types.ts"
 import type { CardEvent, CardRequest, CardRequestStatus, RequestError, SubmitInput } from "./types.ts"
@@ -14,7 +14,8 @@ import type { CardEvent, CardRequest, CardRequestStatus, RequestError, SubmitInp
 //  - jamais deux cartes pour une même demande (Idempotency-Key KardPay = id) ;
 //  - un résultat CBS incertain (timeout, doublon) n'est JAMAIS réessayé à
 //    l'aveugle : la demande passe en `needs_review` ;
-//  - un échec définitif d'émission déclenche le remboursement ;
+//  - un échec définitif d'émission passe la demande en `refund_due` : la
+//    comptabilité crédite le client à la main dans le CBS puis le confirme ;
 //  - un webhook rejoué ou arrivé dans le désordre ne casse rien.
 
 export class ValidationError extends Error {
@@ -100,7 +101,7 @@ export class CardOrchestrator {
       createdBy: input.createdBy,
       pricing,
       status: "requested",
-      attempts: { debit: 0, issue: 0, refund: 0 },
+      attempts: { debit: 0, issue: 0 },
       history: [{ at, status: "requested", note: "Demande enregistrée." }],
       version: 0,
       createdAt: at,
@@ -120,8 +121,6 @@ export class CardOrchestrator {
         return this.debitStep(request)
       case "debited":
         return this.issueStep(request)
-      case "refund_pending":
-        return this.refundStep(request)
       case "awaiting_issuer":
         return this.timeoutStep(request)
       default:
@@ -134,7 +133,7 @@ export class CardOrchestrator {
     let current = await this.advance(id)
     for (let i = 1; i < maxSteps; i++) {
       const before = current.status
-      if (TERMINAL_STATUSES.includes(before) || before === "awaiting_issuer") break
+      if (TERMINAL_STATUSES.includes(before) || before === "awaiting_issuer" || before === "refund_due") break
       const next = await this.advance(id)
       if (next.status === before) return next
       current = next
@@ -171,22 +170,60 @@ export class CardOrchestrator {
     if (event.kind === "card_issued") {
       if (request.status === "awaiting_issuer" || request.status === "debited") {
         next = this.transition(request, "issued", "Carte confirmée par KardPay (webhook).", { kardpayCardId: event.cardId })
-      } else if (request.status === "refund_pending" || request.status === "failed_refunded") {
-        // Carte émise alors qu'on avait engagé ou fait le remboursement : perte possible.
-        next = this.transition(request, "needs_review", "Carte émise ALORS que le remboursement était engagé : vérifier d'urgence.", {
+      } else if (request.status === "refund_due" || request.status === "failed_refunded") {
+        // Carte émise alors que le remboursement est dû ou déjà fait : perte possible.
+        next = this.transition(request, "needs_review", "Carte émise ALORS que le remboursement était dû ou déjà fait : annuler le crédit ou bloquer la carte, vérifier d'urgence.", {
           kardpayCardId: event.cardId,
           lastError: this.error("webhook", "issued_after_refund", "Carte émise après remboursement."),
         })
       }
     } else if (event.kind === "card_failed") {
       if (request.status === "awaiting_issuer" || request.status === "debited") {
-        next = this.transition(request, "refund_pending", "Émission refusée par KardPay (webhook) : remboursement à faire.", {
+        next = this.transition(request, "refund_due", "Émission refusée par KardPay (webhook) : remboursement à faire par la comptabilité.", {
           lastError: this.error("webhook", "card_failed", "KardPay a signalé un échec d'émission."),
         })
       }
     }
     if (next) await this.repo.save(next)
     return (await this.repo.markEventSeen(event.eventId)) ? "processed" : "duplicate"
+  }
+
+  // ---- Remboursements manuels ----------------------------------------
+
+  /** Remboursements à effectuer par la comptabilité (liste de travail du dashboard). */
+  async refundsDue(): Promise<CardRequest[]> {
+    return this.repo.listByStatus("refund_due")
+  }
+
+  /**
+   * La comptabilité a crédité le client dans le CBS : elle saisit la référence
+   * de l'écriture. Le montant à créditer est `request.pricing.totalDebitCents`
+   * (recharge + frais : remboursement intégral). Principe des quatre yeux :
+   * la personne qui confirme ne peut pas être celle qui a créé la demande.
+   * Rejouer la même confirmation est sans effet.
+   */
+  async confirmRefund(id: string, input: { reference: string; confirmedBy: string }): Promise<CardRequest> {
+    const request = await this.repo.get(id)
+    if (!request) throw new Error(`Demande ${id} introuvable.`)
+    const reference = input.reference.trim()
+    if (!reference) throw new ValidationError("reference_required", "Référence de l'écriture CBS requise.")
+    if (!input.confirmedBy) throw new ValidationError("confirmer_required", "Personne qui confirme requise.")
+
+    if (request.status === "failed_refunded") {
+      if (request.cbsRefundRef === reference) return request
+      throw new ValidationError("already_refunded", `Déjà remboursée (réf. ${request.cbsRefundRef}).`)
+    }
+    if (request.status !== "refund_due") {
+      throw new ValidationError("not_refundable", `Cette demande n'a pas de remboursement à confirmer (état : ${request.status}).`)
+    }
+    if (input.confirmedBy === request.createdBy) {
+      throw new ValidationError("same_person", "La confirmation du remboursement doit venir d'une autre personne que l'auteur de la demande.")
+    }
+    return this.repo.save(
+      this.transition(request, "failed_refunded", `Remboursement de ${request.pricing.totalDebitCents / 100} USD confirmé par ${input.confirmedBy} (réf. CBS ${reference}).`, {
+        cbsRefundRef: reference,
+      })
+    )
   }
 
   // ---- Pas internes ---------------------------------------------------
@@ -266,7 +303,7 @@ export class CardOrchestrator {
       case "retryable":
         if (working.attempts.issue >= this.config.maxAttempts) {
           return this.repo.save(
-            this.transition(working, "refund_pending", `Émission impossible après ${working.attempts.issue} essais : remboursement à faire.`, {
+            this.transition(working, "refund_due", `Émission impossible après ${working.attempts.issue} essais : remboursement à faire par la comptabilité.`, {
               lastError: this.error("issue", result.code, result.message),
             })
           )
@@ -274,47 +311,8 @@ export class CardOrchestrator {
         return this.repo.save(this.annotate(working, `Émission à réessayer (même clé) : ${result.message}`, this.error("issue", result.code, result.message)))
       case "permanent":
         return this.repo.save(
-          this.transition(working, "refund_pending", `Émission refusée : ${result.message}. Remboursement à faire.`, {
+          this.transition(working, "refund_due", `Émission refusée : ${result.message}. Remboursement à faire.`, {
             lastError: this.error("issue", result.code, result.message),
-          })
-        )
-    }
-  }
-
-  private async refundStep(request: CardRequest): Promise<CardRequest> {
-    const working = this.bump(request, "refund")
-    let result: CbsRefundResult
-    try {
-      result = await this.cbs.refund({
-        requestId: `${request.id}-refund`,
-        accountNumber: request.accountNumber,
-        originalReference: request.cbsDebitRef ?? "",
-        amountCents: request.pricing.totalDebitCents, // remboursement intégral, frais compris
-        currency: request.currency,
-        description: `Remboursement carte virtuelle ${request.id}`,
-      })
-    } catch (e) {
-      result = { kind: "unknown", message: e instanceof Error ? e.message : String(e) }
-    }
-
-    switch (result.kind) {
-      case "ok":
-        return this.repo.save(this.transition(working, "failed_refunded", `Client remboursé (réf. ${result.reference}).`, { cbsRefundRef: result.reference }))
-      case "not_applied":
-        if (working.attempts.refund >= this.config.maxAttempts) {
-          return this.repo.save(
-            this.transition(working, "needs_review", "Remboursement CBS impossible après plusieurs essais : le client reste débité.", {
-              lastError: this.error("refund", "cbs_unavailable", result.message),
-            })
-          )
-        }
-        return this.repo.save(this.annotate(working, `Remboursement non appliqué, nouvelle tentative : ${result.message}`, this.error("refund", "not_applied", result.message)))
-      case "unknown":
-      case "duplicate":
-      case "rejected":
-        return this.repo.save(
-          this.transition(working, "needs_review", "Remboursement CBS incertain ou refusé : le client est peut-être encore débité, vérifier le relevé.", {
-            lastError: this.error("refund", result.kind, result.kind === "unknown" || result.kind === "rejected" ? result.message : "Doublon de requestId.")
           })
         )
     }
@@ -332,7 +330,7 @@ export class CardOrchestrator {
 
   // ---- Utilitaires purs -----------------------------------------------
 
-  private bump(request: CardRequest, step: "debit" | "issue" | "refund"): CardRequest {
+  private bump(request: CardRequest, step: "debit" | "issue"): CardRequest {
     return { ...request, attempts: { ...request.attempts, [step]: request.attempts[step] + 1 } }
   }
 

@@ -1,7 +1,7 @@
 import { ConflictError } from "../domain/ports.ts"
 import type { RequestRepository } from "../domain/ports.ts"
-import { TERMINAL_STATUSES } from "../domain/types.ts"
-import type { CardRequest } from "../domain/types.ts"
+import { AUTOMATIC_STATUSES } from "../domain/types.ts"
+import type { CardRequest, CardRequestStatus } from "../domain/types.ts"
 
 // Dépôt en mémoire : sert aux tests et au développement. La version PostgreSQL
 // (ou autre, à décider) devra reproduire les mêmes garanties : contrainte
@@ -43,7 +43,11 @@ export class MemoryRepository implements RequestRepository {
   }
 
   async listActionable() {
-    return [...this.requests.values()].filter((r) => !TERMINAL_STATUSES.includes(r.status)).map((r) => structuredClone(r))
+    return [...this.requests.values()].filter((r) => AUTOMATIC_STATUSES.includes(r.status)).map((r) => structuredClone(r))
+  }
+
+  async listByStatus(status: CardRequestStatus) {
+    return [...this.requests.values()].filter((r) => r.status === status).map((r) => structuredClone(r))
   }
 
   async markEventSeen(eventId: string) {

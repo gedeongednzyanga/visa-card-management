@@ -1,4 +1,4 @@
-import type { CardRequest, FeeSchedule } from "./types.ts"
+import type { CardRequest, CardRequestStatus, FeeSchedule } from "./types.ts"
 
 // ---- CBS BankSoft -------------------------------------------------------
 // Le CBS répond HTTP 200 même pour une erreur applicative, et rejette un
@@ -13,16 +13,11 @@ export type CbsDebitResult =
   | { kind: "unknown"; message: string } // timeout après envoi : on ne sait pas si c'est débité
   | { kind: "duplicate" } // requestId déjà vu : une tentative précédente a peut-être abouti
 
-export type CbsRefundResult =
-  | { kind: "ok"; reference: string }
-  | { kind: "not_applied"; message: string }
-  | { kind: "unknown"; message: string }
-  | { kind: "duplicate" }
-  | { kind: "rejected"; code: string; message: string }
-
 export interface CbsPort {
   debit(input: { requestId: string; accountNumber: string; amountCents: number; currency: "USD"; description: string }): Promise<CbsDebitResult>
-  refund(input: { requestId: string; accountNumber: string; originalReference: string; amountCents: number; currency: "USD"; description: string }): Promise<CbsRefundResult>
+  // Pas de refund() : le remboursement est fait à la main par la comptabilité
+  // (décision du 04/11/2026), ce qui évite aussi de dépendre d'une opération
+  // d'annulation CBS non documentée.
 }
 
 // ---- KardPay ------------------------------------------------------------
@@ -51,8 +46,9 @@ export interface RequestRepository {
   findByCardId(cardId: string): Promise<CardRequest | undefined>
   /** Sauvegarde si `request.version` correspond à la version stockée, puis l'incrémente ; sinon ConflictError. */
   save(request: CardRequest): Promise<CardRequest>
-  /** Demandes non terminales à (re)faire avancer. */
+  /** Demandes que l'automate fait avancer seul (hors attente humaine et états terminaux). */
   listActionable(): Promise<CardRequest[]>
+  listByStatus(status: CardRequestStatus): Promise<CardRequest[]>
   /** true la première fois que cet identifiant d'événement est vu, false ensuite. */
   markEventSeen(eventId: string): Promise<boolean>
 }
