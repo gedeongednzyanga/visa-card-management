@@ -121,36 +121,26 @@ async function main() {
     // Hypothèse : un ASMX appelé en JSON exige TOUS les paramètres de la méthode
     // (manquant ou en trop = 500 générique). On envoie donc la liste complète de
     // la doc section 10.1, avec des chaînes vides pour "pas de filtre".
-    // Les dates au format yyyy-MM-dd (doc) donnent "Account not found" alors que
-    // le même compte répond sans dates : on teste d'autres formats, sur le seul
-    // compte courant (celui qui a des opérations depuis le 01/10/2026).
-    if (accountNumber !== "200200000002") continue
+    // Format de date confirmé par l'API : yyyy-MM-dd. On vérifie que startDate +
+    // endDate ensemble fonctionnent (un essai précédent avait échoué à cause
+    // du suffixe {"d":null}, pas à cause des dates) et ce que renvoie le compte
+    // d'épargne, qui n'a peut-être aucune opération sur la période.
     const noFilter = { type: "", movement: "", status: "" }
-    const dates = (startDate: string, endDate: string) => ({ page: "1", limit: "5", startDate, endDate, ...noFilter })
+    const q = (startDate: string, endDate: string) => ({ page: "1", limit: "5", startDate, endDate, ...noFilter })
     const variants: { extra: object; encrypt: boolean }[] = [
-      { extra: dates("01/10/2026", "04/11/2026"), encrypt: false },
-      { extra: dates("2026-10-01T00:00:00", "2026-11-04T23:59:59"), encrypt: false },
-      { extra: dates("2026-10-01", ""), encrypt: false },
-      { extra: dates("", "2026-11-04"), encrypt: false },
-      { extra: dates("2020-01-01", "2030-12-31"), encrypt: false },
-      { extra: dates("01-10-2026", "04-11-2026"), encrypt: false },
-      { extra: dates("10/01/2026", "11/04/2026"), encrypt: false },
+      { extra: q("", ""), encrypt: false },
+      { extra: q("2026-10-01", "2026-11-04"), encrypt: false },
+      { extra: q("2026-10-01", "2026-10-31"), encrypt: false },
+      { extra: q("", "2026-11-04"), encrypt: false },
     ]
     for (const { extra, encrypt } of variants) {
-      console.log(`\n=== Essai : compte ${accountNumber}, ${encrypt ? "corps CHIFFRÉ" : "corps clair"}, paramètres ${JSON.stringify(extra)} ===`)
-      const tx = await call(
-        "GetAccountTransactions",
-        { accountNumber, requestId: `SMOKE-${Date.now()}-TX`, ...extra },
-        true,
-        encrypt
-      )
+      console.log(`\n=== compte ${accountNumber}, ${JSON.stringify(extra)} ===`)
+      const tx = await call("GetAccountTransactions", { accountNumber, requestId: `SMOKE-${Date.now()}-TX`, ...extra }, true, encrypt)
       if (tx?.data) {
-        console.log(`  → OK : ${tx.data.transactions?.length ?? "?"} transaction(s), pagination :`, JSON.stringify(tx.data.pagination))
-        return
+        console.log(`  → OK : ${tx.data.transactions?.length ?? "?"} transaction(s), pagination : ${JSON.stringify(tx.data.pagination)}`)
       }
     }
   }
-  console.warn("\nGetAccountTransactions a échoué sur tous les essais : à signaler à Processware avec l'heure exacte des appels.")
 }
 
 main()
