@@ -2,7 +2,14 @@
 // (fournisseur Processware). Voir le plan technique, onglet "Modèle
 // opérationnel", section 7.
 //
-// ⚠️ HYPOTHÈSE NON VALIDÉE — à confirmer avant toute mise en production.
+// ✅ CONFIRMÉ le 03/11/2026 contre l'API UAT réelle : AES-256-CBC, clé et IV
+// lus comme octets UTF-8 bruts, padding PKCS7, Base64, IV fixe. Le texte
+// ci-dessous documente le raisonnement d'origine (l'hypothèse s'est avérée
+// juste). Autres constats : le payload déchiffré est encodé en JSON deux fois
+// (voir lib/banksoft/client.ts) et l'API renvoie HTTP 200 même en cas d'erreur
+// applicative.
+//
+// Raisonnement d'origine
 // ----------------------------------------------------------------------
 // Le document fourni par Processware ("Banking API – Client Integration
 // Document", section 4 "Encryption") indique que les réponses sont

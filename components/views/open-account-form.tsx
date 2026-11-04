@@ -129,7 +129,7 @@ export function OpenAccountForm() {
                   min={0}
                   step="0.01"
                   value={deposit}
-                  onChange={(e) => setDeposit(e.target.value)}
+                  onValueChange={setDeposit}
                   placeholder="0.00"
                   aria-invalid={deposit !== "" && !depositOk}
                 />
