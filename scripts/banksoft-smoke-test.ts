@@ -115,6 +115,7 @@ async function main() {
   for (const accountNumber of numbers) {
     const full = { page: "1", limit: "5", startDate: "2020-01-01", endDate: "2026-11-04", status: "COMPLETED" }
     const variants: { extra: object; encrypt: boolean }[] = [
+      { extra: { page: "1", limit: "5", startDate: "2026-10-01", endDate: "2026-11-04" }, encrypt: false },
       { extra: { page: "1", limit: "5" }, encrypt: false },
       { extra: {}, encrypt: false },
       { extra: full, encrypt: false },
