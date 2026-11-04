@@ -1,4 +1,4 @@
-import type { CardRequest } from "./types.ts"
+import type { CardRequest, FeeSchedule } from "./types.ts"
 
 // ---- CBS BankSoft -------------------------------------------------------
 // Le CBS répond HTTP 200 même pour une erreur applicative, et rejette un
@@ -55,4 +55,16 @@ export interface RequestRepository {
   listActionable(): Promise<CardRequest[]>
   /** true la première fois que cet identifiant d'événement est vu, false ensuite. */
   markEventSeen(eventId: string): Promise<boolean>
+}
+
+// ---- Tarification -------------------------------------------------------
+export class NoFeeScheduleError extends Error {
+  constructor() {
+    super("Aucune grille tarifaire en vigueur : à publier depuis le dashboard avant toute émission.")
+  }
+}
+
+export interface PricingPort {
+  /** Grille en vigueur à cet instant ; NoFeeScheduleError s'il n'y en a pas. */
+  getEffective(at: Date): Promise<FeeSchedule>
 }

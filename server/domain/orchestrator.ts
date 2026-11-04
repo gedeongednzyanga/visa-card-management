@@ -1,5 +1,6 @@
 import { ConflictError } from "./ports.ts"
-import type { CbsDebitResult, CbsPort, CbsRefundResult, IssueResult, KardPayPort, RequestRepository } from "./ports.ts"
+import type { CbsDebitResult, CbsPort, CbsRefundResult, IssueResult, KardPayPort, PricingPort, RequestRepository } from "./ports.ts"
+import { computeCharges } from "./pricing.ts"
 import { TERMINAL_STATUSES } from "./types.ts"
 import type { CardEvent, CardRequest, CardRequestStatus, RequestError, SubmitInput } from "./types.ts"
 
@@ -25,9 +26,9 @@ export class ValidationError extends Error {
 }
 
 export interface OrchestratorConfig {
-  /** Recharge minimale imposée par la banque (20 $). */
+  /** Bornes dures : la recharge minimale imposée par la banque (20 $), quelle que soit la grille. */
   minCents: number
-  /** Recharge maximale par top-up annoncée par KardPay (5 000 $, relevable). */
+  /** Bornes dures : la recharge maximale par top-up annoncée par KardPay (5 000 $, relevable). */
   maxCents: number
   maxAttempts: number
   issuerTimeoutMs: number
@@ -44,6 +45,7 @@ export interface OrchestratorDeps {
   repo: RequestRepository
   cbs: CbsPort
   kardpay: KardPayPort
+  pricing: PricingPort
   now: () => Date
   newId: () => string
   config?: Partial<OrchestratorConfig>
@@ -53,6 +55,7 @@ export class CardOrchestrator {
   private repo: RequestRepository
   private cbs: CbsPort
   private kardpay: KardPayPort
+  private pricing: PricingPort
   private now: () => Date
   private newId: () => string
   private config: OrchestratorConfig
@@ -61,6 +64,7 @@ export class CardOrchestrator {
     this.repo = deps.repo
     this.cbs = deps.cbs
     this.kardpay = deps.kardpay
+    this.pricing = deps.pricing
     this.now = deps.now
     this.newId = deps.newId
     this.config = { ...DEFAULT_CONFIG, ...deps.config }
@@ -76,12 +80,14 @@ export class CardOrchestrator {
     if (!input.clientId) throw new ValidationError("client_required", "Client requis.")
     if (!/^\d{6,20}$/.test(input.accountNumber)) throw new ValidationError("invalid_account", "Numéro de compte invalide.")
     if (!Number.isInteger(input.amountCents)) throw new ValidationError("invalid_amount", "Montant invalide.")
-    if (input.amountCents < this.config.minCents) {
-      throw new ValidationError("amount_too_low", `Recharge minimale : ${this.config.minCents / 100} USD.`)
-    }
-    if (input.amountCents > this.config.maxCents) {
-      throw new ValidationError("amount_too_high", `Recharge maximale : ${this.config.maxCents / 100} USD.`)
-    }
+    // Grille en vigueur AU MOMENT de la demande ; ses bornes ne peuvent jamais
+    // sortir des bornes dures (banque, KardPay).
+    const schedule = await this.pricing.getEffective(this.now())
+    const minCents = Math.max(schedule.minLoadCents, this.config.minCents)
+    const maxCents = Math.min(schedule.maxLoadCents, this.config.maxCents)
+    if (input.amountCents < minCents) throw new ValidationError("amount_too_low", `Recharge minimale : ${minCents / 100} USD.`)
+    if (input.amountCents > maxCents) throw new ValidationError("amount_too_high", `Recharge maximale : ${maxCents / 100} USD.`)
+    const pricing = computeCharges(schedule, input.amountCents)
 
     const at = this.now().toISOString()
     const request: CardRequest = {
@@ -92,6 +98,7 @@ export class CardOrchestrator {
       amountCents: input.amountCents,
       currency: "USD",
       createdBy: input.createdBy,
+      pricing,
       status: "requested",
       attempts: { debit: 0, issue: 0, refund: 0 },
       history: [{ at, status: "requested", note: "Demande enregistrée." }],
@@ -191,7 +198,7 @@ export class CardOrchestrator {
       result = await this.cbs.debit({
         requestId: request.id,
         accountNumber: request.accountNumber,
-        amountCents: request.amountCents,
+        amountCents: request.pricing.totalDebitCents, // recharge + frais
         currency: request.currency,
         description: `Carte virtuelle ${request.id}`,
       })
@@ -282,7 +289,7 @@ export class CardOrchestrator {
         requestId: `${request.id}-refund`,
         accountNumber: request.accountNumber,
         originalReference: request.cbsDebitRef ?? "",
-        amountCents: request.amountCents,
+        amountCents: request.pricing.totalDebitCents, // remboursement intégral, frais compris
         currency: request.currency,
         description: `Remboursement carte virtuelle ${request.id}`,
       })

@@ -9,10 +9,13 @@ export class FakeKardPay implements KardPayPort {
   /** clé d'idempotence -> identifiant de carte */
   cards = new Map<string, string>()
   issueCalls: string[] = []
+  /** montant chargé demandé à chaque appel (hors frais Accès Finance) */
+  issueAmounts: number[] = []
   private seq = 0
 
   async issueCard(input: { idempotencyKey: string; amountCents: number }): Promise<IssueResult> {
     this.issueCalls.push(input.idempotencyKey)
+    this.issueAmounts.push(input.amountCents)
     const mode = this.issueScript.shift() ?? "ok"
     if (mode === "throw") throw new Error("coupure réseau")
     if (mode === "retryable") return { kind: "retryable", code: "insufficient_escrow_balance", message: "Solde de l'escrow insuffisant." }

@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { FakeCbs } from "../adapters/fake-cbs.ts"
 import { FakeKardPay } from "../adapters/fake-kardpay.ts"
+import { MemoryPricing } from "../adapters/memory-pricing.ts"
 import { MemoryRepository } from "../adapters/memory-repository.ts"
 import { CardOrchestrator, ValidationError } from "../domain/orchestrator.ts"
 import { ConflictError } from "../domain/ports.ts"
@@ -12,12 +13,25 @@ function setup(config = {}) {
   const repo = new MemoryRepository()
   const cbs = new FakeCbs()
   const kardpay = new FakeKardPay()
+  const pricing = new MemoryPricing()
+  // Grille par défaut des tests : aucun frais, bornes = bornes dures.
+  pricing.publish({
+    id: "grille-0",
+    effectiveFrom: "2026-01-01T00:00:00Z",
+    createdBy: "admin",
+    issuanceFeeCents: 0,
+    loadFeeFixedCents: 0,
+    loadFeePercentBp: 0,
+    minLoadCents: 2_000,
+    maxLoadCents: 500_000,
+  })
   const clock = { t: Date.parse("2026-11-04T10:00:00Z") }
   let n = 0
   const orch = new CardOrchestrator({
     repo,
     cbs,
     kardpay,
+    pricing,
     now: () => new Date(clock.t),
     newId: () => `req-${++n}`,
     config,
@@ -26,7 +40,7 @@ function setup(config = {}) {
   let tokens = 0
   const submit = (amountCents = 5_000) =>
     orch.submit({ clientToken: `tok-${++tokens}`, clientId: "200000002", accountNumber: ACCOUNT, amountCents, createdBy: "agent-1" })
-  return { repo, cbs, kardpay, clock, orch, submit }
+  return { repo, cbs, kardpay, pricing, clock, orch, submit }
 }
 
 test("chemin nominal : débit puis émission, avec le même identifiant partout", async () => {

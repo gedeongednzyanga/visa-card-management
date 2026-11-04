@@ -33,6 +33,40 @@ export interface HistoryEntry {
   note: string
 }
 
+/**
+ * Grille tarifaire versionnée, saisie depuis le dashboard par un rôle autorisé.
+ * Ce sont les frais facturés AU CLIENT par Accès Finance — distincts des coûts
+ * fournisseur de KardPay (0,45 $ par transaction, prix de la carte), qui ne se
+ * paramètrent pas ici. Une nouvelle version ne modifie jamais les demandes déjà
+ * créées : chaque demande garde une copie figée des frais appliqués.
+ */
+export interface FeeSchedule {
+  id: string
+  /** À partir de quand cette grille s'applique (ISO) : permet de programmer un changement. */
+  effectiveFrom: string
+  createdBy: string
+  note?: string
+  /** Frais fixes d'émission de la carte. */
+  issuanceFeeCents: number
+  /** Frais fixes sur le montant chargé. */
+  loadFeeFixedCents: number
+  /** Frais proportionnels sur le montant chargé, en points de base (100 = 1 %). */
+  loadFeePercentBp: number
+  /** Recharge minimale / maximale acceptée par Accès Finance (dans les bornes banque et KardPay). */
+  minLoadCents: number
+  maxLoadCents: number
+}
+
+/** Copie figée des frais appliqués à une demande (audit, réconciliation, remboursement). */
+export interface AppliedPricing {
+  feeScheduleId: string
+  issuanceFeeCents: number
+  loadFeeCents: number
+  feeCents: number
+  /** Montant débité du client : recharge + frais. */
+  totalDebitCents: number
+}
+
 export interface CardRequest {
   /**
    * UUID unique de l'opération. Sert de `requestId` pour le débit CBS ET
@@ -45,9 +79,11 @@ export interface CardRequest {
   clientToken: string
   clientId: string
   accountNumber: string
+  /** Montant chargé sur la carte. */
   amountCents: number
   currency: "USD"
   createdBy: string
+  pricing: AppliedPricing
   status: CardRequestStatus
   cbsDebitRef?: string
   cbsRefundRef?: string

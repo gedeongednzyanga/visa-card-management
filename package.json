@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "kardpay:smoke-test": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/kardpay-smoke-test.ts",
-    "server:test": "node --experimental-strip-types --test server/tests/orchestrator.test.ts",
+    "server:test": "node --experimental-strip-types --test server/tests/orchestrator.test.ts server/tests/pricing.test.ts",
     "server:typecheck": "tsc --noEmit -p server/tsconfig.json",
     "banksoft:smoke-test": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/banksoft-smoke-test.ts"
   },
