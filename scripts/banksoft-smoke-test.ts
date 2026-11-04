@@ -22,7 +22,7 @@
 
 import { decryptBankSoftPayload } from "../lib/banksoft/crypto.ts"
 
-async function call(method: string, body: object) {
+async function call(method: string, body: object, quiet = false) {
   const baseUrl = process.env.BANKSOFT_BASE_URL!.replace(/\/+$/, "")
   const bodyJson = JSON.stringify(body)
   console.log(`\n→ POST ${baseUrl}/${method}`)
@@ -55,7 +55,8 @@ async function call(method: string, body: object) {
       key: process.env.BANKSOFT_AES_KEY!,
       iv: process.env.BANKSOFT_AES_IV!,
     })
-    console.log("✓ Déchiffré :", plaintext)
+    if (quiet) console.log(`✓ Déchiffré (${plaintext.length} caractères, contenu non affiché : données réelles)`)
+    else console.log("✓ Déchiffré :", plaintext)
     // Confirmé le 03/11/2026 : le payload déchiffré est encodé en JSON deux
     // fois (une chaîne JSON contenant une chaîne JSON). Un seul JSON.parse
     // donne une chaîne de caractères — toujours un JSON "valide", d'où un
@@ -95,7 +96,24 @@ async function main() {
   const details = await call("GetClientdetails", { clientId, requestId: `SMOKE-${Date.now()}` })
   if (!details) process.exit(1)
 
-  await call("GetClientAccounts", { clientId, requestId: `SMOKE-${Date.now()}-ACC` })
+  const accounts = await call("GetClientAccounts", { clientId, requestId: `SMOKE-${Date.now()}-ACC` })
+  const accountNumber: string | undefined = accounts?.data?.accounts?.[0]?.accountNumber?.trim()
+  if (!accountNumber) {
+    console.warn("Aucun compte trouvé : GetAccountTransactions non testé.")
+    return
+  }
+
+  // Lecture seule. Le contenu n'est pas affiché (transactions réelles) :
+  // on vérifie la forme et la pagination. Doc section 10 : page/limit sont
+  // des chaînes, limit <= 100, requestId unique à chaque page.
+  const tx = await call(
+    "GetAccountTransactions",
+    { accountNumber, requestId: `SMOKE-${Date.now()}-TX`, page: "1", limit: "5" },
+    true
+  )
+  if (tx?.data) {
+    console.log(`  → ${tx.data.transactions?.length ?? "?"} transaction(s) reçue(s), pagination :`, JSON.stringify(tx.data.pagination))
+  }
 }
 
 main()
