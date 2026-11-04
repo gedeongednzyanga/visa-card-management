@@ -89,7 +89,9 @@ export async function POST(req: NextRequest) {
     )
   } catch (e) {
     if (e instanceof BankSoftError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: e.status || 502 })
+      // Le CBS répond HTTP 200 même pour une erreur applicative : jamais 2xx
+      // avec un corps d'erreur (l'interface le prendrait pour un succès).
+      return NextResponse.json({ error: e.code, message: e.message }, { status: e.status >= 400 ? e.status : e.status === 0 ? 502 : 422 })
     }
     // Une erreur qui n'est PAS un BankSoftError vient d'avant l'appel réseau
     // (ex. variable d'environnement manquante — voir cryptoConfig()/headers()

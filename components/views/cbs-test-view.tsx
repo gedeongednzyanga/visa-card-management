@@ -12,7 +12,7 @@
 // pour cette raison — accès par URL directe uniquement pendant les tests).
 
 import { useState } from "react"
-import { AlertTriangle, Landmark, Loader2, Search, User } from "lucide-react"
+import { AlertTriangle, ChevronLeft, ChevronRight, FileText, Landmark, Loader2, Search, User } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,11 +26,135 @@ type LookupResult = {
   accounts: { accountNumber: string; accountType: string; currency: string; balance: number; status: string }[]
 }
 
+type Tx = {
+  id: string
+  reference: string
+  type: string
+  movement: string
+  amount: number
+  currency: string
+  balanceAfter: number
+  status: string
+  description: string
+  createdAt: string
+}
+type Statement = {
+  accountNumber: string
+  transactions: Tx[]
+  pagination: { page: number; limit: number; total: number; totalPages: number }
+}
+
+// Relevé d'un compte (GetAccountTransactions). Dates au format AAAA-MM-JJ,
+// confirmé par l'API ; vides = pas de filtre.
+function StatementCard({ accountNumber }: { accountNumber: string }) {
+  const [startDate, setStartDate] = useState("")
+  const [endDate, setEndDate] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [statement, setStatement] = useState<Statement | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function load(page: number) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/cbs/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountNumber, startDate, endDate, page }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setStatement(null)
+        setError(data.message ?? data.error ?? "Erreur inconnue.")
+        return
+      }
+      setStatement(data)
+    } catch {
+      setError("Le serveur est injoignable.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const p = statement?.pagination
+  return (
+    <Card className="shadow-xs ring-foreground/5">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 font-semibold">
+          <FileText className="size-4" />
+          Relevé du compte <span className="font-mono text-sm">{accountNumber}</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="startDate">Du</Label>
+            <Input id="startDate" type="date" value={startDate} onValueChange={setStartDate} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="endDate">Au</Label>
+            <Input id="endDate" type="date" value={endDate} onValueChange={setEndDate} />
+          </div>
+          <Button type="button" onClick={() => load(1)} disabled={loading}>
+            {loading ? <Loader2 className="animate-spin" /> : <Search />}
+            Charger
+          </Button>
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        {statement && p && (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {p.total} opération(s) — page {p.page} / {Math.max(p.totalPages, 1)}
+            </p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Sens</TableHead>
+                  <TableHead>Montant</TableHead>
+                  <TableHead>Solde après</TableHead>
+                  <TableHead>Description</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {statement.transactions.map((t) => (
+                  <TableRow key={t.id || t.reference}>
+                    <TableCell className="text-xs whitespace-nowrap">{t.createdAt?.slice(0, 10)}</TableCell>
+                    <TableCell>{t.type}</TableCell>
+                    <TableCell>{t.movement}</TableCell>
+                    <TableCell>{formatAmount(t.amount, t.currency as "USD" | "CDF")}</TableCell>
+                    <TableCell>{formatAmount(t.balanceAfter, t.currency as "USD" | "CDF")}</TableCell>
+                    <TableCell className="max-w-64 truncate text-xs" title={t.description}>
+                      {t.description}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" disabled={loading || p.page <= 1} onClick={() => load(p.page - 1)}>
+                <ChevronLeft /> Précédent
+              </Button>
+              <Button type="button" variant="outline" size="sm" disabled={loading || p.page >= p.totalPages} onClick={() => load(p.page + 1)}>
+                Suivant <ChevronRight />
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export function CbsTestView() {
   const [clientId, setClientId] = useState("")
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<LookupResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [statementFor, setStatementFor] = useState<string | null>(null)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -38,6 +162,7 @@ export function CbsTestView() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setStatementFor(null)
     try {
       const res = await fetch("/api/cbs/lookup", {
         method: "POST",
@@ -152,6 +277,7 @@ export function CbsTestView() {
                     <TableHead>Devise</TableHead>
                     <TableHead>Solde</TableHead>
                     <TableHead>Statut</TableHead>
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -162,12 +288,19 @@ export function CbsTestView() {
                       <TableCell>{a.currency}</TableCell>
                       <TableCell>{formatAmount(a.balance, a.currency as "USD" | "CDF")}</TableCell>
                       <TableCell>{a.status}</TableCell>
+                      <TableCell>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setStatementFor(a.accountNumber)}>
+                          Relevé
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </CardContent>
           </Card>
+
+          {statementFor && <StatementCard key={statementFor} accountNumber={statementFor} />}
         </>
       )}
     </div>
