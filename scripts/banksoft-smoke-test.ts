@@ -113,14 +113,14 @@ async function main() {
   // = plantage côté serveur : on varie le compte puis les paramètres pour
   // isoler la cause (compte ? page/limit ? bug fournisseur ?).
   for (const accountNumber of numbers) {
-    const full = { page: "1", limit: "5", startDate: "2020-01-01", endDate: "2026-11-04", status: "COMPLETED" }
+    // Hypothèse : un ASMX appelé en JSON exige TOUS les paramètres de la méthode
+    // (manquant ou en trop = 500 générique). On envoie donc la liste complète de
+    // la doc section 10.1, avec des chaînes vides pour "pas de filtre".
+    const noFilter = { type: "", movement: "", status: "" }
     const variants: { extra: object; encrypt: boolean }[] = [
-      { extra: { page: "1", limit: "5", startDate: "2026-10-01", endDate: "2026-11-04" }, encrypt: false },
-      { extra: { page: "1", limit: "5" }, encrypt: false },
-      { extra: {}, encrypt: false },
-      { extra: full, encrypt: false },
-      { extra: { page: "1", limit: "5" }, encrypt: true },
-      { extra: full, encrypt: true },
+      { extra: { page: "1", limit: "5", startDate: "2026-10-01", endDate: "2026-11-04", ...noFilter }, encrypt: false },
+      { extra: { page: "1", limit: "5", startDate: "", endDate: "", ...noFilter }, encrypt: false },
+      { extra: { page: "1", limit: "5", startDate: "2026-10-01", endDate: "2026-11-04", type: "TRANSFER", movement: "DEBIT", status: "COMPLETED" }, encrypt: false },
     ]
     for (const { extra, encrypt } of variants) {
       console.log(`\n=== Essai : compte ${accountNumber}, ${encrypt ? "corps CHIFFRÉ" : "corps clair"}, paramètres ${JSON.stringify(extra)} ===`)
