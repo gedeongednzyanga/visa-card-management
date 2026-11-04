@@ -94,3 +94,23 @@ export function decryptBankSoftPayload(ciphertextBase64: string, config: BankSof
   const decrypted = Buffer.concat([decipher.update(Buffer.from(ciphertextBase64, "base64")), decipher.final()])
   return decrypted.toString("utf8")
 }
+
+/**
+ * La réponse brute de l'API est une chaîne JSON (entre guillemets) contenant
+ * le Base64. On la décode comme une vraie chaîne JSON plutôt que de retirer
+ * seulement les guillemets : sinon les séquences d'échappement éventuelles
+ * (\\/, \\u002b, \\n...) restent dans le Base64 et cassent le déchiffrement
+ * ("wrong final block length"), surtout sur les longues réponses.
+ */
+export function normalizeBankSoftCiphertext(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (typeof parsed === "string") return parsed.trim()
+    } catch {
+      // pas une chaîne JSON valide : repli ci-dessous
+    }
+  }
+  return trimmed.replace(/^"|"$/g, "")
+}

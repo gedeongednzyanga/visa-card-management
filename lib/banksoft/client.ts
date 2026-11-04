@@ -13,7 +13,7 @@
 // inspecte `success`/`error` dans le JSON déchiffré, pas seulement le
 // code HTTP.
 
-import { decryptBankSoftPayload, encryptBankSoftPayload } from "./crypto"
+import { decryptBankSoftPayload, encryptBankSoftPayload, normalizeBankSoftCiphertext } from "./crypto"
 
 export class BankSoftError extends Error {
   constructor(
@@ -86,7 +86,7 @@ export async function banksoftFetch<T>(
 
   let plaintext: string
   try {
-    plaintext = decryptBankSoftPayload(raw.trim().replace(/^"|"$/g, ""), cryptoConfig())
+    plaintext = decryptBankSoftPayload(normalizeBankSoftCiphertext(raw), cryptoConfig())
   } catch (err) {
     throw new BankSoftError(res.status, "decrypt_error", err instanceof Error ? err.message : "Déchiffrement échoué.")
   }

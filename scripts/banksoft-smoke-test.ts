@@ -20,7 +20,7 @@
 // pas une clé ni un token — donc il peut être passé en argument ; les
 // vrais secrets, eux, viennent toujours de l'environnement.)
 
-import { decryptBankSoftPayload, encryptBankSoftPayload } from "../lib/banksoft/crypto.ts"
+import { decryptBankSoftPayload, encryptBankSoftPayload, normalizeBankSoftCiphertext } from "../lib/banksoft/crypto.ts"
 
 async function call(method: string, body: object, quiet = false, encrypt = false) {
   const baseUrl = process.env.BANKSOFT_BASE_URL!.replace(/\/+$/, "")
@@ -55,7 +55,7 @@ async function call(method: string, body: object, quiet = false, encrypt = false
   }
 
   try {
-    const plaintext = decryptBankSoftPayload(raw.trim().replace(/^"|"$/g, ""), {
+    const plaintext = decryptBankSoftPayload(normalizeBankSoftCiphertext(raw), {
       key: process.env.BANKSOFT_AES_KEY!,
       iv: process.env.BANKSOFT_AES_IV!,
     })
@@ -80,6 +80,11 @@ async function call(method: string, body: object, quiet = false, encrypt = false
     return parsed
   } catch (err) {
     console.error("✗ Déchiffrement/parsing échoué :", err instanceof Error ? err.message : err)
+    // Diagnostic sans données réelles : longueurs et caractères hors Base64.
+    const norm = normalizeBankSoftCiphertext(raw)
+    const bad = [...new Set(norm.replace(/[A-Za-z0-9+/=]/g, "").split(""))].map((c) => "U+" + c.charCodeAt(0).toString(16).padStart(4, "0"))
+    console.error(`  diag : brut=${raw.length} car., normalisé=${norm.length} (mod 4 = ${norm.length % 4}), octets décodés=${Buffer.from(norm, "base64").length} (mod 16 = ${Buffer.from(norm, "base64").length % 16}), caractères hors Base64 : ${bad.length ? bad.join(", ") : "aucun"}`)
+    console.error(`  début brut : ${JSON.stringify(raw.slice(0, 3))}, fin brute : ${JSON.stringify(raw.slice(-3))}`)
     console.error("  Voir les commentaires de decryptBankSoftPayload (lib/banksoft/crypto.ts) pour les pistes à essayer.")
     return null
   }
