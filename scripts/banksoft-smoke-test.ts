@@ -20,11 +20,14 @@
 // pas une clé ni un token — donc il peut être passé en argument ; les
 // vrais secrets, eux, viennent toujours de l'environnement.)
 
-import { decryptBankSoftPayload } from "../lib/banksoft/crypto.ts"
+import { decryptBankSoftPayload, encryptBankSoftPayload } from "../lib/banksoft/crypto.ts"
 
-async function call(method: string, body: object, quiet = false) {
+async function call(method: string, body: object, quiet = false, encrypt = false) {
   const baseUrl = process.env.BANKSOFT_BASE_URL!.replace(/\/+$/, "")
   const bodyJson = JSON.stringify(body)
+  const sentBody = encrypt
+    ? encryptBankSoftPayload(bodyJson, { key: process.env.BANKSOFT_AES_KEY!, iv: process.env.BANKSOFT_AES_IV! })
+    : bodyJson
   console.log(`\n→ POST ${baseUrl}/${method}`)
   console.log(`  body (non chiffré, cette méthode n'en a pas besoin d'après la doc) : ${bodyJson}`)
 
@@ -35,7 +38,7 @@ async function call(method: string, body: object, quiet = false) {
       "x-api-key": process.env.BANKSOFT_API_KEY!,
       "Content-Type": "application/json",
     },
-    body: bodyJson,
+    body: sentBody,
   })
 
   const raw = await res.text()
@@ -110,12 +113,21 @@ async function main() {
   // = plantage côté serveur : on varie le compte puis les paramètres pour
   // isoler la cause (compte ? page/limit ? bug fournisseur ?).
   for (const accountNumber of numbers) {
-    for (const extra of [{ page: "1", limit: "5" }, {}]) {
-      console.log(`\n=== Essai : compte ${accountNumber}, paramètres ${JSON.stringify(extra)} ===`)
+    const full = { page: "1", limit: "5", startDate: "2020-01-01", endDate: "2026-11-04", status: "COMPLETED" }
+    const variants: { extra: object; encrypt: boolean }[] = [
+      { extra: { page: "1", limit: "5" }, encrypt: false },
+      { extra: {}, encrypt: false },
+      { extra: full, encrypt: false },
+      { extra: { page: "1", limit: "5" }, encrypt: true },
+      { extra: full, encrypt: true },
+    ]
+    for (const { extra, encrypt } of variants) {
+      console.log(`\n=== Essai : compte ${accountNumber}, ${encrypt ? "corps CHIFFRÉ" : "corps clair"}, paramètres ${JSON.stringify(extra)} ===`)
       const tx = await call(
         "GetAccountTransactions",
         { accountNumber, requestId: `SMOKE-${Date.now()}-TX`, ...extra },
-        true
+        true,
+        encrypt
       )
       if (tx?.data) {
         console.log(`  → OK : ${tx.data.transactions?.length ?? "?"} transaction(s), pagination :`, JSON.stringify(tx.data.pagination))
