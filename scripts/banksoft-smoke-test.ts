@@ -44,6 +44,7 @@ async function call(method: string, body: object, quiet = false) {
 
   if (res.status !== 200) {
     console.error("✗ Statut non-200 — avant de toucher au chiffrement, vérifiez :")
+    console.error("  500 (réponse ASMX non chiffrée) → plantage côté serveur sur cette requête, pas un souci d'auth.")
     console.error("  401 → Bearer Token ou x-api-key invalide.")
     console.error("  403 → IP non autorisée (voir le point WAN IP / allowlist, plan technique section 7).")
     console.error("  404 → mauvaise URL/méthode ASMX.")
@@ -97,23 +98,32 @@ async function main() {
   if (!details) process.exit(1)
 
   const accounts = await call("GetClientAccounts", { clientId, requestId: `SMOKE-${Date.now()}-ACC` })
-  const accountNumber: string | undefined = accounts?.data?.accounts?.[0]?.accountNumber?.trim()
-  if (!accountNumber) {
+  const numbers: string[] = (accounts?.data?.accounts ?? []).map((a: { accountNumber: string }) => a.accountNumber.trim())
+  if (!numbers.length) {
     console.warn("Aucun compte trouvé : GetAccountTransactions non testé.")
     return
   }
 
-  // Lecture seule. Le contenu n'est pas affiché (transactions réelles) :
-  // on vérifie la forme et la pagination. Doc section 10 : page/limit sont
-  // des chaînes, limit <= 100, requestId unique à chaque page.
-  const tx = await call(
-    "GetAccountTransactions",
-    { accountNumber, requestId: `SMOKE-${Date.now()}-TX`, page: "1", limit: "5" },
-    true
-  )
-  if (tx?.data) {
-    console.log(`  → ${tx.data.transactions?.length ?? "?"} transaction(s) reçue(s), pagination :`, JSON.stringify(tx.data.pagination))
+  // Lecture seule. Contenu non affiché (transactions réelles) : on vérifie
+  // la forme et la pagination. Doc section 10 : page/limit sont des chaînes,
+  // limit <= 100, requestId unique à chaque appel. Un HTTP 500 ASMX générique
+  // = plantage côté serveur : on varie le compte puis les paramètres pour
+  // isoler la cause (compte ? page/limit ? bug fournisseur ?).
+  for (const accountNumber of numbers) {
+    for (const extra of [{ page: "1", limit: "5" }, {}]) {
+      console.log(`\n=== Essai : compte ${accountNumber}, paramètres ${JSON.stringify(extra)} ===`)
+      const tx = await call(
+        "GetAccountTransactions",
+        { accountNumber, requestId: `SMOKE-${Date.now()}-TX`, ...extra },
+        true
+      )
+      if (tx?.data) {
+        console.log(`  → OK : ${tx.data.transactions?.length ?? "?"} transaction(s), pagination :`, JSON.stringify(tx.data.pagination))
+        return
+      }
+    }
   }
+  console.warn("\nGetAccountTransactions a échoué sur tous les essais : à signaler à Processware avec l'heure exacte des appels.")
 }
 
 main()
