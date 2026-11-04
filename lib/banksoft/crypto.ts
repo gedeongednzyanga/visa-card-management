@@ -96,21 +96,17 @@ export function decryptBankSoftPayload(ciphertextBase64: string, config: BankSof
 }
 
 /**
- * La réponse brute de l'API est une chaîne JSON (entre guillemets) contenant
- * le Base64. On la décode comme une vraie chaîne JSON plutôt que de retirer
- * seulement les guillemets : sinon les séquences d'échappement éventuelles
- * (\\/, \\u002b, \\n...) restent dans le Base64 et cassent le déchiffrement
- * ("wrong final block length"), surtout sur les longues réponses.
+ * Extrait le Base64 chiffré de la réponse brute de l'API.
+ *
+ * Constaté le 04/11/2026 : le serveur ASMX ajoute `{"d":null}` APRÈS le texte
+ * chiffré (la méthode écrit sa réponse elle-même, puis ASMX ajoute le suffixe
+ * de sa propre sérialisation). Quand le Base64 se termine par "=", Node ignore
+ * ce qui suit ; sinon les lettres du suffixe sont décodées comme des données
+ * et le déchiffrement échoue ("wrong final block length"). On ne garde donc
+ * que le préfixe Base64 valide (guillemets éventuels retirés).
  */
 export function normalizeBankSoftCiphertext(raw: string): string {
-  const trimmed = raw.trim()
-  if (trimmed.startsWith('"')) {
-    try {
-      const parsed = JSON.parse(trimmed)
-      if (typeof parsed === "string") return parsed.trim()
-    } catch {
-      // pas une chaîne JSON valide : repli ci-dessous
-    }
-  }
-  return trimmed.replace(/^"|"$/g, "")
+  const trimmed = raw.trim().replace(/^"/, "")
+  const match = trimmed.match(/^[A-Za-z0-9+/]*={0,2}/)
+  return match ? match[0] : ""
 }

@@ -12,6 +12,12 @@
 // n'apparaît qu'une fois le payload déchiffré. C'est pourquoi ce client
 // inspecte `success`/`error` dans le JSON déchiffré, pas seulement le
 // code HTTP.
+//
+// Autres constats du 04/11/2026 : (1) le serveur ajoute `{"d":null}` après le
+// texte chiffré (voir normalizeBankSoftCiphertext) ; (2) un ASMX en JSON exige
+// TOUS les paramètres de la méthode — un paramètre manquant donne un 500
+// générique non chiffré (ex. GetAccountTransactions : page, limit, startDate,
+// endDate, type, movement, status, avec "" pour "pas de filtre").
 
 import { decryptBankSoftPayload, encryptBankSoftPayload, normalizeBankSoftCiphertext } from "./crypto"
 
